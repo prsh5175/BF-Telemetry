@@ -97,6 +97,22 @@ local _lastArmed = false
 local _fmStr     = ""
 local _lastThrUp = false
 
+-- EdgeTX returns string-type telemetry sensors (like FM) as a byte-array
+-- table, not a Lua string.  Convert either form to a plain string.
+local function fmToString(raw)
+  if raw == nil then return "" end
+  if type(raw) == "string" then return raw end
+  if type(raw) == "table" then
+    local chars = {}
+    for _, b in ipairs(raw) do
+      if b == 0 then break end        -- null terminator
+      chars[#chars + 1] = string.char(b)
+    end
+    return table.concat(chars)
+  end
+  return ""
+end
+
 local function throttlePct()
   local raw = getValue("thr")
   if type(raw) ~= "number" then return nil end
@@ -115,22 +131,37 @@ local function sourceIsArmed(src)
   return nil
 end
 
-local function isArmed(fmRaw, opts)
-  -- 1. Explicit arm source wins if configured and found.
+local function hasActiveTelemetry()
+  -- RQly > 0 means we have a live ELRS/CRSF link right now.
+  -- Without this guard, EdgeTX serves stale persisted sensor values
+  -- (e.g. last-known FM = "ACRO") even when the model is not connected,
+  -- causing a false ARMED reading on startup.
+  local lq = getS(SN_LQ)
+  return type(lq) == "number" and lq > 0
+end
+
+local function isArmed(fmStr, opts)
+  -- 1. Explicit arm switch wins if configured (most reliable).
   local fromOpt = sourceIsArmed(opts and opts.ArmSrc)
   if fromOpt ~= nil then return fromOpt end
 
-  -- 2. FM telemetry string from Betaflight.
-  --    Disarmed state: string begins with "!" (e.g. "!DISARMED", "!ACRO").
-  --    Armed state:    any non-empty string without a leading "!".
-  if fmRaw == nil or fmRaw == "" then return false end
-  local t = tostring(fmRaw)
-  return string.sub(t, 1, 1) ~= "!"
+  -- 2. No live telemetry link → never armed.
+  if not hasActiveTelemetry() then return false end
+
+  -- 3. FM telemetry string from Betaflight.
+  --    BF marks disarmed state in one of two ways depending on version:
+  --      a) "!" prefix  → e.g. "!DISARMED", "!ACRO"   (BF 4.3+)
+  --      b) "*" suffix  → e.g. "ACRO*", "ANGL*"       (older BF / some configs)
+  --    Any non-empty string WITHOUT these markers = armed.
+  if fmStr == nil or fmStr == "" then return false end
+  if string.sub(fmStr, 1, 1) == "!" then return false end
+  if string.sub(fmStr, -1)   == "*" then return false end
+  return true
 end
 
 local function tickArmTimer(opts)
   local raw   = getS(SN_FM)
-  local s     = raw and tostring(raw) or ""
+  local s     = fmToString(raw)   -- decode byte-table → plain string
   local armed = isArmed(s, opts)
 
   local thr    = throttlePct()
@@ -166,9 +197,11 @@ end
 --  RF MODE
 -- =========================================================================
 local _RFM = {
-  [0]="4Hz",  [1]="25Hz", [2]="50Hz",  [3]="100Hz",
-  [4]="150Hz",[5]="200Hz",[6]="250Hz", [7]="500Hz",
-  [8]="F1000",[9]="F500", [10]="DVDA",
+  -- ELRS 2.4GHz rate enum (matches ExpressLRS RATE_* firmware constants)
+  [0]="4Hz",      [1]="25Hz",    [2]="50Hz",    [3]="100Hz",
+  [4]="100Hz/8ch",[5]="150Hz",   [6]="200Hz",   [7]="250Hz",
+  [8]="333Hz/8ch",[9]="500Hz",   [10]="D250Hz",
+  [11]="D500Hz",  [12]="F500Hz", [13]="F1000",
 }
 local function rfModeStr(v)
   if v == nil then return "---" end
@@ -360,7 +393,7 @@ local function drawBar(tx, ty, tw, th, pct, col)
   lcd.drawRectangle(bx, by, bw, bh, C_SIL_MID)
   if pct then
     lcd.drawText(tx + tw/2, by + bh/2 - 8,
-      string.format("%d%%", math.floor(pct)), MIDSIZE+BOLD+CENTERED+(col or C_WHITE))
+      string.format("%d%%", math.floor(pct)), MIDSIZE+BOLD+CENTER+(col or C_WHITE))
   end
 end
 
@@ -400,10 +433,10 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
     lcd.drawFilledRectangle(nx-1, ny-1, 3, 3, C_WHITE)
   end
   if val_str then
-    lcd.drawText(cx, cy - 12, val_str, MIDSIZE+BOLD+CENTERED+(col or C_WHITE))
+    lcd.drawText(cx, cy - 12, val_str, MIDSIZE+BOLD+CENTER+(col or C_WHITE))
   end
   if unit_str then
-    lcd.drawText(cx, cy + 2, unit_str, SMLSIZE+CENTERED+C_DIM)
+    lcd.drawText(cx, cy + 2, unit_str, SMLSIZE+CENTER+C_DIM)
   end
 end
 
@@ -529,7 +562,10 @@ local function drawHeader(o)
   -- vertical separator
   lcd.drawFilledRectangle(262, 8, 2, 58, C_SIL_LO)
   -- flight mode
-  local fmDisp = (_fmStr ~= "") and _fmStr or "DISARMED"
+  local fmDisp = "MODE"
+  if hasActiveTelemetry() then
+    fmDisp = (_fmStr ~= "") and _fmStr or "MODE"
+  end
   local fmCol  = _lastArmed and C_ORANGE or C_DIM
   lcd.drawText(272, 12, fmDisp, MIDSIZE+BOLD+fmCol)
   -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)

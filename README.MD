@@ -44,7 +44,13 @@ The widget shows the following 12 tiles (populated automatically from your ELRS/
 | Distance | `Dist` | m |
 | RF Mode | `RFMD` | — |
 
-The header bar shows model name, flight mode, armed/disarmed status, and TX battery voltage.
+The header bar shows model name, flight mode, armed/disarmed status, TX battery voltage, and the active tile display mode.
+
+Header behavior:
+
+- With no active telemetry link, the flight mode area shows `MODE`.
+- Once telemetry is active, the flight mode area shows the current flight mode reported by Betaflight.
+- The armed/disarmed indicator uses either the configured arm source or the Betaflight `FM` telemetry state.
 
 ---
 
@@ -60,6 +66,25 @@ Open the widget's **Options** menu on the radio (long-press the widget area) to 
 | `CritV` | 34 | 30 – 42 | Critical cell voltage × 10 (34 = 3.4 V/cell) |
 | `LQWrn` | 70 | 10 – 99 | Link quality % below which the tile turns yellow/red |
 | `Mode`  | 0  | 0 – 2  | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
+| `ThrOn` | 5  | 0 – 50 | Throttle % threshold used to start the flight timer |
+| `ArmSrc` | — | source | Optional EdgeTX source for the arm switch/channel |
+
+Mode values shown in the header:
+
+- `0` = `[ NUM ]`
+- `1` = `[ BAR ]`
+- `2` = `[GAUGE]`
+
+Flight timer behavior:
+
+- The timer resets to `--:--` when disarmed.
+- The timer starts only after the model is armed and throttle rises above `ThrOn`.
+- If `ArmSrc` is configured, that source is used as the primary armed/disarmed signal.
+- If `ArmSrc` is not configured, the widget falls back to Betaflight flight-mode telemetry.
+
+RF mode behavior:
+
+- `RFMD` is decoded using the ExpressLRS rate enum, so values such as `250Hz`, `500Hz`, `F500Hz`, and `F1000` match the ELRS Lua script.
 
 To change which sensor feeds a tile, edit the sensor name constants near the top of `main.lua`:
 
