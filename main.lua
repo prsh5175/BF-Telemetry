@@ -8,6 +8,8 @@ local OPTIONS = {
   { "CritV",   VALUE, 34, 30, 42 },
   { "LQWrn",   VALUE, 70, 10, 99 },
   { "Mode",    VALUE,  0,  0,  2 },
+  { "ThrOn",   VALUE,  5,  0, 50 },
+  { "ArmSrc", SOURCE,  0 },
 }
 
 local SN_LQ    = "RQly"
@@ -93,19 +95,63 @@ end
 local _armStart  = nil
 local _lastArmed = false
 local _fmStr     = ""
+local _lastThrUp = false
 
-local function isArmed(s)
-  if s == nil or s == "" then return false end
-  local t = tostring(s)
-  return t ~= "!DISARMED" and string.find(t, "DISARM") == nil
+local function throttlePct()
+  local raw = getValue("thr")
+  if type(raw) ~= "number" then return nil end
+  return math.max(0, math.min(100, math.floor((raw + 1024) / 20.48)))
 end
 
-local function tickArmTimer()
+-- ArmSrc option: if set, use that switch/channel directly.
+-- Otherwise fall back to the Betaflight FM telemetry field:
+--   BF sends "!DISARMED" when disarmed, bare mode name (e.g. "ACRO") when armed.
+local function sourceIsArmed(src)
+  if src == nil or src == 0 then return nil end
+  local info = getFieldInfo(src)
+  if not info then return nil end        -- source not found on this radio
+  local v = getValue(src)
+  if type(v) == "number" then return v > 0 end
+  return nil
+end
+
+local function isArmed(fmRaw, opts)
+  -- 1. Explicit arm source wins if configured and found.
+  local fromOpt = sourceIsArmed(opts and opts.ArmSrc)
+  if fromOpt ~= nil then return fromOpt end
+
+  -- 2. FM telemetry string from Betaflight.
+  --    Disarmed state: string begins with "!" (e.g. "!DISARMED", "!ACRO").
+  --    Armed state:    any non-empty string without a leading "!".
+  if fmRaw == nil or fmRaw == "" then return false end
+  local t = tostring(fmRaw)
+  return string.sub(t, 1, 1) ~= "!"
+end
+
+local function tickArmTimer(opts)
   local raw   = getS(SN_FM)
   local s     = raw and tostring(raw) or ""
-  local armed = isArmed(s)
-  if armed and not _lastArmed then _armStart = getTime()
-  elseif not armed then _armStart = nil end
+  local armed = isArmed(s, opts)
+
+  local thr    = throttlePct()
+  local thrOn  = (opts and opts.ThrOn) or 5
+  local thrUp  = thr ~= nil and thr > thrOn
+
+  if not armed then
+    -- Disarmed: reset everything so next arm+throttle starts fresh.
+    _armStart  = nil
+    _lastThrUp = false
+  elseif _armStart == nil then
+    -- Armed but timer not yet running.
+    -- Start on any throttle-up event (rising edge OR already-raised at arm time).
+    if thrUp then
+      _armStart = getTime()
+    end
+    _lastThrUp = thrUp
+  else
+    _lastThrUp = thrUp
+  end
+
   _lastArmed = armed
   _fmStr     = cleanFM(s)
 end
@@ -412,9 +458,7 @@ local function tdMah(o)
            pct=v and math.min(100,v/10) or nil, col=col }
 end
 local function tdThrottle(o)
-  local raw=getValue("thr")
-  local v=type(raw)=="number" and
-    math.max(0,math.min(100,math.floor((raw+1024)/20.48))) or nil
+  local v = throttlePct()
   return { val=v and string.format("%d",v) or "---", unit="%",
            pct=v, col=C_ORANGE }
 end
@@ -526,14 +570,17 @@ end
 local function create(zone, options)
   initColors()
   _sid = {}
+  _armStart = nil
+  _lastArmed = false
+  _lastThrUp = false
   return { zone = zone, options = options }
 end
 local function update(widget, options) widget.options = options end
-local function background(widget)      tickArmTimer() end
+local function background(widget)      tickArmTimer(widget.options) end
 
 local function refresh(widget, event, touchState)
   initColors()
-  tickArmTimer()
+  tickArmTimer(widget.options)
   lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
   drawPit()
   drawGrid(widget.options)
