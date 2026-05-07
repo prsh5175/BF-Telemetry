@@ -1,8 +1,6 @@
 # BF Telemetry Widget
 
-An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, designed specifically for its 800×480 color LCD touchscreen. It displays 12 live Betaflight/ELRS telemetry tiles in a 4×3 grid with a carbon-fiber styled frame, and supports three display modes: numeric, bar, and arc gauge.
-
-![display modes: numeric · bar · gauge]
+An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, designed specifically for its 800×480 color LCD touchscreen. It displays 12 live Betaflight/ELRS telemetry tiles in a 4×3 grid.
 
 ---
 
