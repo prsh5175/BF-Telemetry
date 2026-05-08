@@ -9,14 +9,25 @@ def _base():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-emulator_path = os.path.join(_base(), 'emulator.py')
+def _find_emulator_path():
+    base = _base()
+    candidates = [
+        os.path.join(base, 'emulator.py'),
+        os.path.join(base, 'dist', 'emulator.py'),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
+
+emulator_path = _find_emulator_path()
 
 if not os.path.exists(emulator_path):
     try:
         import tkinter as tk
         import tkinter.messagebox as mb
         tk.Tk().withdraw()
-        mb.showerror("BFTelem", f"emulator.py not found next to the exe:\n{emulator_path}")
+        mb.showerror("BFTelem", f"emulator.py not found in expected locations:\n{emulator_path}")
     except Exception:
         print(f"ERROR: emulator.py not found at {emulator_path}", file=sys.stderr)
     sys.exit(1)

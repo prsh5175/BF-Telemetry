@@ -66,6 +66,7 @@ Open the widget's **Options** menu on the radio (long-press the widget area) to 
 | `CritV` | 34 | 30 – 42 | Critical cell voltage × 10 (34 = 3.4 V/cell) |
 | `LQWrn` | 70 | 10 – 99 | Link quality % below which the tile turns yellow/red |
 | `Mode`  | 0  | 0 – 2  | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
+| `Theme` | 0  | 0 – 3  | Accent color theme: `0` = Betaflight yellow, `1` = cyan, `2` = green, `3` = orange |
 | `ThrOn` | 5  | 0 – 50 | Throttle % threshold used to start the flight timer |
 | `ArmSrc` | — | source | Optional EdgeTX source for the arm switch/channel |
 

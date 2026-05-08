@@ -8,7 +8,6 @@ local OPTIONS = {
   { "CritV",   VALUE, 34, 30, 42 },
   { "LQWrn",   VALUE, 70, 10, 99 },
   { "Mode",    VALUE,  0,  0,  2 },
-  { "Theme",   VALUE,  0,  0,  3 },
   { "ThrOn",   VALUE,  5,  0, 50 },
   { "ArmSrc", SOURCE,  0 },
 }
@@ -34,67 +33,29 @@ local C_CYAN, C_CYAN_DIM, C_PIT
 local C_ORANGE, C_WHITE, C_DIM, C_GREEN, C_YELLOW, C_RED
 local C_SHADOW, C_HILIGHT
 local _colorsReady = false
-local _themeId = -1
 
-local function initColors(theme)
-  local t = math.floor(tonumber(theme) or 0)
-  if t < 0 then t = 0 elseif t > 3 then t = 3 end
-  if _colorsReady and _themeId == t then return end
-
+local function initColors()
+  if _colorsReady then return end
   C_BG      = lcd.RGB(  0,   0,   0)  -- pitch black
   C_TILE    = lcd.RGB(  8,  10,  20)  -- very dark tile
   C_CF1     = lcd.RGB(  0,   0,   0)  -- frame body: pure black
   C_CF2     = lcd.RGB( 10,  14,  30)  -- subtle stripe
   C_CF3     = lcd.RGB( 18,  24,  50)
   C_PIT     = lcd.RGB(  0,   0,   0)  -- pit: pure black
-
-  -- Accent theme (used by divider lines, borders and header highlights)
-  if t == 1 then
-    -- Cyan theme
-    C_SIL_HI   = lcd.RGB(  0, 180, 255)
-    C_SIL_MID  = lcd.RGB(  0,  90, 180)
-    C_SIL_LO   = lcd.RGB(  0,  40,  90)
-    C_SIL_DK   = lcd.RGB(  0,  15,  45)
-    C_CYAN     = lcd.RGB(  0, 255, 255)
-    C_CYAN_DIM = lcd.RGB(  0,  60,  80)
-    C_HILIGHT  = lcd.RGB( 20,  50, 130)
-  elseif t == 2 then
-    -- Green theme
-    C_SIL_HI   = lcd.RGB(110, 255, 120)
-    C_SIL_MID  = lcd.RGB( 40, 180,  70)
-    C_SIL_LO   = lcd.RGB( 15,  90,  35)
-    C_SIL_DK   = lcd.RGB(  5,  45,  15)
-    C_CYAN     = lcd.RGB( 50, 220,  90)
-    C_CYAN_DIM = lcd.RGB( 15,  70,  30)
-    C_HILIGHT  = lcd.RGB( 35, 120,  45)
-  elseif t == 3 then
-    -- Orange theme
-    C_SIL_HI   = lcd.RGB(255, 170,  60)
-    C_SIL_MID  = lcd.RGB(220, 110,  25)
-    C_SIL_LO   = lcd.RGB(120,  55,   8)
-    C_SIL_DK   = lcd.RGB( 55,  22,   0)
-    C_CYAN     = lcd.RGB(255, 120,  15)
-    C_CYAN_DIM = lcd.RGB( 90,  40,   6)
-    C_HILIGHT  = lcd.RGB(165,  70,  10)
-  else
-    -- Betaflight-style yellow theme (default)
-    C_SIL_HI   = lcd.RGB(255, 220,  70)
-    C_SIL_MID  = lcd.RGB(210, 165,  35)
-    C_SIL_LO   = lcd.RGB(110,  78,  12)
-    C_SIL_DK   = lcd.RGB( 48,  30,   0)
-    C_CYAN     = lcd.RGB(255, 190,  20)
-    C_CYAN_DIM = lcd.RGB( 85,  55,   8)
-    C_HILIGHT  = lcd.RGB(150, 105,  20)
-  end
-
+  C_SIL_HI  = lcd.RGB(  0, 180, 255)  -- bright electric blue
+  C_SIL_MID = lcd.RGB(  0,  90, 180)
+  C_SIL_LO  = lcd.RGB(  0,  40,  90)
+  C_SIL_DK  = lcd.RGB(  0,  15,  45)
+  C_CYAN     = lcd.RGB(  0, 255, 255)  -- pure cyan
+  C_CYAN_DIM = lcd.RGB(  0,  60,  80)
   C_SHADOW   = lcd.RGB(  0,   0,   0)
+  C_HILIGHT  = lcd.RGB( 20,  50, 130)
   C_ORANGE  = lcd.RGB(255, 140,   0)  -- bright orange
   C_WHITE   = lcd.RGB(255, 255, 255)  -- pure white
   C_DIM     = lcd.RGB(100, 130, 180)  -- visible but dim
   C_GREEN   = lcd.RGB(  0, 255, 100)  -- neon green
   C_YELLOW  = lcd.RGB(255, 230,   0)  -- bright yellow
   C_RED     = lcd.RGB(255,  40,  60)  -- neon red
-  _themeId = t
   _colorsReady = true
 end
 
@@ -277,9 +238,9 @@ end
 --  Peak zone: x=200..600 (flat 82px high = header info zone)
 --  Tile grid: x=44..756, y=84..458
 -- =========================================================================
-local FRM_L    = 30
-local FRM_R    = 30
-local FRM_B    = 14
+local FRM_L    = 44
+local FRM_R    = 44
+local FRM_B    = 22
 local TOP_EDGE = 22
 local TOP_MID  = 82
 local RAMP_W   = 80
@@ -293,25 +254,17 @@ local GY = TOP_MID + 2
 local GW = 800 - FRM_L - FRM_R
 local GH = 480 - TOP_MID - FRM_B
 
--- Honeycomb layout (12 cells = 4 columns x 3 staggered rows)
-local HX_COLS = 6
-local HX_ROWS = 2
-local HX_GAP  = 2
+local _COLS = 4
+local _ROWS = 3
+local _GAP  = 4
 
-local HEX_W = math.floor((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
-local HEX_H = math.floor(HEX_W * 1.00)
-local _maxHexH = math.floor((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
-if HEX_H > _maxHexH then
-  HEX_H = _maxHexH
-  HEX_W = math.floor(HEX_H / 1.00)
-end
+local TW = math.floor((GW - _GAP * (_COLS + 1)) / _COLS)
+local TH = math.floor((GH - _GAP * (_ROWS + 1)) / _ROWS)
 
-local HX_STEP_X = math.floor(HEX_W * 0.75)
-local HX_STEP_Y = HEX_H
-local HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
-local HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
-local HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
-local HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
+local TY_LBL  = 7
+local TY_VAL  = 24
+local TY_UNIT = 62
+local TY_SUB  = 76
 
 -- =========================================================================
 --  CARBON FIBER FRAME
@@ -386,33 +339,28 @@ end
 --  TILE
 -- =========================================================================
 local function drawTile(tx, ty, tw, th)
-  -- Flat-top hexagon: flat edges at top and bottom, points at left and right.
-  local q  = math.max(8, math.floor(tw / 4))
-  local hh = math.floor(th / 2)
-  local xL  = tx
-  local xR  = tx + tw - 1
-  local xLT = tx + q
-  local xRT = tx + tw - q - 1
-  local yM  = ty + hh
-  local y1  = ty
-  local y4  = ty + th - 1
-
-  -- Lightweight fill: one inner rectangle keeps tile contrast with minimal CPU cost.
-  local pad = math.max(3, math.floor(th * 0.10))
-  local fillY = ty + pad
-  local fillH = th - (pad * 2)
-  local fillW = tw - (q * 2)
-  if fillH > 0 and fillW > 0 then
-    lcd.drawFilledRectangle(tx + q, fillY, fillW, fillH, C_TILE)
-  end
-
-  -- Hex outline (6 edges) so the honeycomb remains clearly visible.
-  lcd.drawLine(xLT, y1,  xRT, y1,  0xFF, C_SIL_HI)   -- top
-  lcd.drawLine(xRT, y1,  xR,  yM,  0xFF, C_SIL_MID)  -- right-top
-  lcd.drawLine(xR,  yM,  xRT, y4,  0xFF, C_SIL_DK)   -- right-bottom
-  lcd.drawLine(xRT, y4,  xLT, y4,  0xFF, C_SIL_DK)   -- bottom
-  lcd.drawLine(xLT, y4,  xL,  yM,  0xFF, C_SIL_MID)  -- left-bottom
-  lcd.drawLine(xL,  yM,  xLT, y1,  0xFF, C_SIL_HI)   -- left-top
+  -- drop shadow
+  lcd.drawFilledRectangle(tx+4, ty+4, tw, th, C_SHADOW)
+  -- fill
+  lcd.drawFilledRectangle(tx, ty, tw, th, C_TILE)
+  -- outer bevel
+  lcd.drawFilledRectangle(tx,      ty, tw,  1, C_SIL_HI)
+  lcd.drawFilledRectangle(tx,      ty,  1, th, C_SIL_HI)
+  lcd.drawFilledRectangle(tx, ty+th-1, tw,  1, C_SIL_DK)
+  lcd.drawFilledRectangle(tx+tw-1, ty,  1, th, C_SIL_DK)
+  -- inner bevel
+  lcd.drawFilledRectangle(tx+1,    ty+1, tw-2,  1, C_SIL_MID)
+  lcd.drawFilledRectangle(tx+1,    ty+1,  1, th-2, C_SIL_MID)
+  lcd.drawFilledRectangle(tx+1, ty+th-2, tw-2,  1, C_SIL_LO)
+  lcd.drawFilledRectangle(tx+tw-2, ty+1,  1, th-2, C_SIL_LO)
+  -- cyan top accent bar
+  lcd.drawFilledRectangle(tx+2, ty, tw-4, 3, C_CYAN)
+  -- cyan top-right L
+  lcd.drawFilledRectangle(tx+tw-8, ty+1,  6, 1, C_CYAN)
+  lcd.drawFilledRectangle(tx+tw-2, ty+1,  1, 6, C_CYAN)
+  -- cyan bottom-left L
+  lcd.drawFilledRectangle(tx+1, ty+th-2,  6, 1, C_CYAN)
+  lcd.drawFilledRectangle(tx+1, ty+th-7,  1, 6, C_CYAN)
 end
 
 -- =========================================================================
@@ -426,18 +374,6 @@ local function val(tx, ty, txt, col, sz)
 end
 local function sub(tx, ty, txt, col)
   lcd.drawText(tx, ty, txt, SMLSIZE + (col or C_DIM))
-end
-
-local function drawHeaderText(x, y, txt, col)
-  local s = string.upper(tostring(txt or ""))
-  lcd.drawText(x + 2, y + 2, s, MIDSIZE + BOLD + C_SIL_DK)
-  lcd.drawText(x, y, s, MIDSIZE + BOLD + (col or C_WHITE))
-end
-
-local function drawHeaderTextC(x, y, txt, col)
-  local s = string.upper(tostring(txt or ""))
-  lcd.drawText(x + 2, y + 2, s, MIDSIZE + BOLD + CENTER + C_SIL_DK)
-  lcd.drawText(x, y, s, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
 end
 
 -- =========================================================================
@@ -465,10 +401,9 @@ end
 --  ARC GAUGE MODE
 -- =========================================================================
 local _PI = 3.14159265
-local GAUGE_ARC_THICK = 96
 
-local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
-  steps = steps or 56
+local function drawArcSeg(cx, cy, r, a1, a2, col)
+  local steps = 12
   local da = (a2 - a1) / steps
   local px, py
   for i = 0, steps do
@@ -480,57 +415,21 @@ local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
   end
 end
 
-local function drawArcBand(cx, cy, r, a1, a2, coreCol, midCol, edgeCol, thick)
-  local half = math.max(1, math.floor((thick or 10) / 2))
-  local steps = math.max(56, math.floor(r * 2.2))
-  for off = -half, half do
-    local rr = r + off
-    if rr > 0 then
-      local d = math.abs(off)
-      if d >= half then
-        drawArcSeg(cx, cy, rr, a1, a2, edgeCol, steps)
-      elseif d >= (half - 1) then
-        drawArcSeg(cx, cy, rr, a1, a2, midCol, steps)
-      else
-        drawArcSeg(cx, cy, rr, a1, a2, coreCol, steps)
-      end
-    end
-  end
-end
-
 local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
-
-  -- Keep gauge thick but always bounded inside the tile.
-  local thick = math.max(8, math.min(GAUGE_ARC_THICK, math.floor(math.min(tw, th) * 0.18)))
-  local halfT = math.floor(thick / 2)
-  local r = math.floor(math.min(tw * 0.28, th * 0.28))
-  local maxRByHeight = math.floor((th - 14 - (halfT * 2)) / 2)
-  if maxRByHeight < 8 then maxRByHeight = 8 end
-  if r > maxRByHeight then r = maxRByHeight end
-
-  local cyMin = ty + 8 + r + halfT
-  local cyMax = ty + th - 6 - r - halfT
-  local cy = math.floor(ty + th * 0.62)
-  if cy < cyMin then cy = cyMin end
-  if cy > cyMax then cy = cyMax end
-
+  local cy = ty + th - 14
+  local r  = math.floor(math.min(tw * 0.38, (th - 26) * 0.76))
   local aS = 210 * _PI / 180
   local aE = (210 - 300) * _PI / 180
-
-  -- Background track: thick and soft-edged.
-  drawArcBand(cx, cy, r, aS, aE, C_SIL_LO, C_SIL_DK, C_CF1, thick)
-
+  drawArcSeg(cx, cy, r, aS, aE, C_SIL_LO)
+  drawArcSeg(cx, cy, r - 3, aS, aE, C_SIL_DK)
   if pct and pct > 0 then
     local aV = aS - (aS - aE) * math.min(pct, 100) / 100
-
-    -- Active track: bright center with faded edges (simulated alpha gradient).
-    drawArcBand(cx, cy, r, aS, aV, col or C_GREEN, C_SIL_MID, C_SIL_DK, thick)
-
+    drawArcSeg(cx, cy, r, aS, aV, col or C_GREEN)
     local nx = cx + math.floor((r - 1) * math.cos(aV) + 0.5)
     local ny = cy + math.floor((r - 1) * math.sin(aV) + 0.5)
-    lcd.drawFilledRectangle(nx-4, ny-4, 9, 9, C_SIL_DK)
-    lcd.drawFilledRectangle(nx-3, ny-3, 7, 7, C_SIL_HI)
+    lcd.drawFilledRectangle(nx-3, ny-3, 7, 7, C_SIL_DK)
+    lcd.drawFilledRectangle(nx-2, ny-2, 5, 5, C_SIL_HI)
     lcd.drawFilledRectangle(nx-1, ny-1, 3, 3, C_WHITE)
   end
   if val_str then
@@ -638,41 +537,16 @@ local TILES = {
 -- =========================================================================
 local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   drawTile(tx, ty, tw, th)
-  local cx = tx + math.floor(tw / 2)
-
-  -- Slightly denser layout so text occupies more of each tile.
-  local yLbl  = ty + math.floor(th * 0.22)
-  local yVal  = ty + math.floor(th * 0.36)
-  local yUnit = ty + math.floor(th * 0.62)
-  local ySub  = ty + math.floor(th * 0.77)
-
-  local shortLbl = lbl_str
-  if lbl_str == "LINK QUALITY" then shortLbl = "LINK Q" end
-  if lbl_str == "FLIGHT TIMER" then shortLbl = "TIMER" end
-  if lbl_str == "CELL VOLTAGE" then shortLbl = "CELL V" end
-  if lbl_str == "TX POWER"     then shortLbl = "TX PWR" end
-  if lbl_str == "CAPACITY"     then shortLbl = "CAPA" end
-  if lbl_str == "DISTANCE"     then shortLbl = "DIST" end
-  if lbl_str == "ALTITUDE"     then shortLbl = "ALT" end
-
-  -- label: small, cyan, centered
-  lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
-
+  lbl(tx+6, ty+TY_LBL, lbl_str)
   if mode == 1 then
-    local pad = math.max(8, math.floor(tw * 0.14))
-    drawBar(tx + pad, ty + math.floor(th * 0.33), tw - 2 * pad, math.floor(th * 0.54), d.pct, d.col)
-    lcd.drawText(cx, yLbl + 14, d.val, SMLSIZE + CENTER + BOLD + (d.col or C_WHITE))
+    drawBar(tx, ty, tw, th, d.pct, d.col)
+    sub(tx+6, ty+TY_LBL+14, d.val, d.col)
   elseif mode == 2 then
-    local pad = math.max(8, math.floor(tw * 0.14))
-    drawGauge(tx + pad, ty + 6, tw - 2 * pad, th - 14, d.pct, d.col, d.val, d.unit)
+    drawGauge(tx, ty, tw, th, d.pct, d.col, d.val, d.unit)
   else
-    lcd.drawText(cx, yVal, d.val, MIDSIZE + BOLD + CENTER + (d.col or C_WHITE))
-    if d.unit and d.unit ~= "" then
-      lcd.drawText(cx, yUnit, d.unit, SMLSIZE + CENTER + C_DIM)
-    end
-    if d.sub then
-      lcd.drawText(cx, ySub, d.sub, SMLSIZE + CENTER + C_DIM)
-    end
+    val(tx+6,  ty+TY_VAL,  d.val, d.col)
+    sub(tx+6,  ty+TY_UNIT, d.unit)
+    if d.sub then sub(tx+6, ty+TY_SUB, d.sub) end
   end
 end
 
@@ -681,31 +555,25 @@ end
 -- =========================================================================
 local function drawHeader(o)
   local mname = "CRAFT"
-  -- Show default label before bind; swap to model name only when telemetry is live.
-  if hasActiveTelemetry() then
-    local info = model.getInfo()
-    if info and info.name and info.name ~= "" then mname = info.name end
-  end
+  local info = model.getInfo()
+  if info and info.name and info.name ~= "" then mname = info.name end
   -- model name (safe x=80 avoids EdgeTX logo, y=12 centers in 82px bar)
-  drawHeaderText(80, 10, mname, C_SIL_HI)
-  -- vertical separators (symmetric around x=400)
-  lcd.drawFilledRectangle(300, 8, 2, 58, C_SIL_LO)
+  lcd.drawText(80, 12, mname, MIDSIZE+BOLD+C_CYAN)
+  -- vertical separator
+  lcd.drawFilledRectangle(262, 8, 2, 58, C_SIL_LO)
   -- flight mode
   local fmDisp = "MODE"
   if hasActiveTelemetry() then
     fmDisp = (_fmStr ~= "") and _fmStr or "MODE"
   end
-  local fmCol = C_SIL_MID
-  if hasActiveTelemetry() then
-    fmCol = _lastArmed and C_ORANGE or C_SIL_HI
-  end
-  drawHeaderTextC(400, 10, fmDisp, fmCol)
+  local fmCol  = _lastArmed and C_ORANGE or C_DIM
+  lcd.drawText(272, 12, fmDisp, MIDSIZE+BOLD+fmCol)
   -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)
-  lcd.drawFilledRectangle(500, 8, 2, 58, C_SIL_LO)
+  lcd.drawFilledRectangle(462, 8, 2, 58, C_SIL_LO)
   if _lastArmed then
-    drawHeaderText(530, 10, "ARMED", C_RED)
+    lcd.drawText(474, 12, "ARMED",    MIDSIZE+BOLD+C_RED)
   else
-    drawHeaderText(530, 10, "DISARMED", C_GREEN)
+    lcd.drawText(474, 12, "DISARMED", MIDSIZE+BOLD+C_GREEN)
   end
   -- TX voltage top-right
   local txv = getValue("tx-voltage")
@@ -724,11 +592,11 @@ end
 local function drawGrid(opts)
   local mode = opts.Mode or 0
   for i, t in ipairs(TILES) do
-    local c  = (i-1) % HX_COLS
-    local r  = math.floor((i-1) / HX_COLS)
-    local tx = HX_ORG_X + c * HX_STEP_X
-    local ty = HX_ORG_Y + r * HX_STEP_Y + ((c % 2) * math.floor(HEX_H / 2))
-    renderTile(tx, ty, HEX_W, HEX_H, t[1], t[2](opts), mode)
+    local c  = (i-1) % _COLS
+    local r  = math.floor((i-1) / _COLS)
+    local tx = GX + _GAP + c * (TW + _GAP)
+    local ty = GY + _GAP + r * (TH + _GAP)
+    renderTile(tx, ty, TW, TH, t[1], t[2](opts), mode)
   end
 end
 
@@ -736,21 +604,18 @@ end
 --  LIFECYCLE
 -- =========================================================================
 local function create(zone, options)
-  initColors(options and options.Theme)
+  initColors()
   _sid = {}
   _armStart = nil
   _lastArmed = false
   _lastThrUp = false
   return { zone = zone, options = options }
 end
-local function update(widget, options)
-  widget.options = options
-  initColors(options and options.Theme)
-end
+local function update(widget, options) widget.options = options end
 local function background(widget)      tickArmTimer(widget.options) end
 
 local function refresh(widget, event, touchState)
-  initColors(widget.options and widget.options.Theme)
+  initColors()
   tickArmTimer(widget.options)
   lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
   drawPit()

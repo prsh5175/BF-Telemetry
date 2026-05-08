@@ -1,0 +1,34 @@
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Editor and local settings
+.vscode/
+
+# Logs and local temp files
+*.log
+*.tmp
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+
+# Build and packaging outputs
+build/
+dist/*.exe
+dist/*.app
+dist/bftelem_path.txt
+*.spec
+
+# IDE metadata
+.idea/

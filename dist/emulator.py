@@ -137,15 +137,15 @@ def make_layout(c):
         return v if isinstance(v, tuple) else d
 
     # -- frame geometry --
-    FRM_L    = n('FRM_L',    44)
-    FRM_R    = n('FRM_R',    44)
-    FRM_B    = n('FRM_B',    22)
+    FRM_L    = n('FRM_L',    30)
+    FRM_R    = n('FRM_R',    30)
+    FRM_B    = n('FRM_B',    14)
     TOP_EDGE = n('TOP_EDGE', 22)
     TOP_MID  = n('TOP_MID',  82)
     RAMP_W   = n('RAMP_W',   80)
     PEAK_X1  = n('PEAK_X1', 200)
     PEAK_X2  = n('PEAK_X2', 600)
-    # -- grid --
+    # -- rectangular grid (legacy) --
     COLS = n('_COLS', 4)
     ROWS = n('_ROWS', 3)
     GAP  = n('_GAP',  4)
@@ -158,6 +158,24 @@ def make_layout(c):
     GH = 480 - TOP_MID - FRM_B
     TW = (GW - GAP * (COLS + 1)) // COLS
     TH = (GH - GAP * (ROWS + 1)) // ROWS
+
+    # -- honeycomb grid (new) --
+    USE_HEX = ('HX_COLS' in c and 'HX_ROWS' in c)
+    HX_COLS = n('HX_COLS', 6)
+    HX_ROWS = n('HX_ROWS', 2)
+    HX_GAP  = n('HX_GAP',  2)
+    HEX_W = int((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
+    HEX_H = int(HEX_W * 1.00)
+    max_hex_h = int((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
+    if HEX_H > max_hex_h:
+        HEX_H = max_hex_h
+        HEX_W = int(HEX_H / 1.00)
+    HX_STEP_X = int(HEX_W * 0.75)
+    HX_STEP_Y = HEX_H
+    HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
+    HX_TOTAL_H = HEX_H * HX_ROWS + (HEX_H // 2)
+    HX_ORG_X = GX + (GW - HX_TOTAL_W) // 2
+    HX_ORG_Y = GY + (GH - HX_TOTAL_H) // 2
     # -- tile text offsets --
     TY_LBL  = n('TY_LBL',   7)
     TY_VAL  = n('TY_VAL',  24)
@@ -171,6 +189,11 @@ def make_layout(c):
         RAMP_X1=RAMP_X1, RAMP_X2=RAMP_X2,
         COLS=COLS, ROWS=ROWS, GAP=GAP,
         GX=GX, GY=GY, GW=GW, GH=GH, TW=TW, TH=TH,
+        USE_HEX=USE_HEX,
+        HX_COLS=HX_COLS, HX_ROWS=HX_ROWS, HX_GAP=HX_GAP,
+        HEX_W=HEX_W, HEX_H=HEX_H,
+        HX_STEP_X=HX_STEP_X, HX_STEP_Y=HX_STEP_Y,
+        HX_ORG_X=HX_ORG_X, HX_ORG_Y=HX_ORG_Y,
         TY_LBL=TY_LBL, TY_VAL=TY_VAL, TY_UNIT=TY_UNIT, TY_SUB=TY_SUB,
         # colors
         C_BG=      col('C_BG',      (  0,   0,   0)),
@@ -209,9 +232,11 @@ F_LBL = F_SML = F_MID = F_DBL = None
 
 def init_fonts():
     global F_LBL, F_SML, F_MID, F_DBL
-    # Try futuristic-looking fonts in priority order; fall back to Consolas
-    _pref = ["Cascadia Mono", "Cascadia Code", "Share Tech Mono",
-             "OCR A Extended", "Lucida Console", "Consolas", "Courier New"]
+    # Futuristic + bold font preferences; falls back to system fonts
+    _pref = ["Sprintura", "Orbitron", "Space Mono", "JetBrains Mono", 
+             "IBM Plex Mono", "Roboto Mono", "Ubuntu Mono", "Cascadia Mono", 
+             "Cascadia Code", "Share Tech Mono", "OCR A Extended", 
+             "Lucida Console", "Consolas", "Courier New"]
     def _font(size, bold=False):
         for name in _pref:
             path = pygame.font.match_font(name, bold=bold)
@@ -234,6 +259,12 @@ def tx(surf, s, x, y, c, font, align="left"):
     if align == "right":   x -= img.get_width()
     elif align == "center": x -= img.get_width() // 2
     surf.blit(img, (x, y))
+
+def tx_header(surf, s, x, y, c, align="left"):
+    t = str(s).upper()
+    # Header text: always bold MIDSIZE for consistency
+    tx(surf, t, x + 2, y + 2, L['C_SIL_DK'], F_MID, align=align)
+    tx(surf, t, x, y, c, F_MID, align=align)
 
 # ── Scan lines overlay ───────────────────────────────────────────────────────
 _sl_surf = None   # lazily created, reused every frame
@@ -305,7 +336,31 @@ def draw_frame(surf):
     fr(surf,   0, H-18, 2, 18, L['C_CYAN']); fr(surf, W-2, H-18, 2, 18, L['C_CYAN'])
 
 # ── Tile ─────────────────────────────────────────────────────────────────────
+def draw_hex_tile(surf, X, Y, TW, TH):
+    # Flat-top hexagon: flat edges at top and bottom, points at left and right.
+    q   = max(8, TW // 4)
+    hh  = TH // 2
+    xL  = X;         xR  = X + TW - 1
+    xLT = X + q;     xRT = X + TW - q - 1
+    yM  = Y + hh
+    y1  = Y;         y4  = Y + TH - 1
+
+    poly = [(xLT, y1), (xRT, y1), (xR, yM), (xRT, y4), (xLT, y4), (xL, yM)]
+    pygame.draw.polygon(surf, L['C_TILE'], poly)
+
+    # outer bevel (essential edges)
+    pygame.draw.line(surf, L['C_SIL_HI'], (xLT, y1),  (xRT, y1),  1)  # top flat
+    pygame.draw.line(surf, L['C_SIL_HI'], (xRT, y1),  (xR,  yM),  1)  # top-right
+    pygame.draw.line(surf, L['C_SIL_HI'], (xL,  yM),  (xLT, y1),  1)  # top-left
+    pygame.draw.line(surf, L['C_SIL_DK'], (xR,  yM),  (xRT, y4),  1)  # bottom-right
+    pygame.draw.line(surf, L['C_SIL_DK'], (xRT, y4),  (xLT, y4),  1)  # bottom flat
+    pygame.draw.line(surf, L['C_SIL_DK'], (xLT, y4),  (xL,  yM),  1)  # bottom-left
+
 def draw_tile(surf, X, Y, TW, TH):
+    if L.get('USE_HEX'):
+        draw_hex_tile(surf, X, Y, TW, TH)
+        return
+
     fr(surf, X+4, Y+4, TW, TH, L['C_SHADOW'])
     fr(surf, X,   Y,   TW, TH, L['C_TILE'])
     fr(surf, X,       Y,      TW,  1, L['C_SIL_HI'])
@@ -368,29 +423,65 @@ def draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s):
 def render_tile(surf, X, Y, TW, TH, label, d, mode):
     _name, val_s, unit_s, pct, c, sub_s = d
     draw_tile(surf, X, Y, TW, TH)
-    tx(surf, label, X+6, Y+L['TY_LBL'], L['C_CYAN'], F_LBL)
-    if mode == 1:
-        draw_bar(surf, X, Y, TW, TH, pct, c)
-        tx(surf, val_s, X+6, Y+L['TY_LBL']+14, c, F_SML)
-    elif mode == 2:
-        draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s)
+
+    if L.get('USE_HEX'):
+        cx = X + TW // 2
+        y_lbl  = Y + int(TH * 0.22)
+        y_val  = Y + int(TH * 0.36)
+        y_unit = Y + int(TH * 0.62)
+        y_sub  = Y + int(TH * 0.77)
+
+        short = {
+            "LINK QUALITY": "LINK Q",
+            "FLIGHT TIMER": "TIMER",
+            "CELL VOLTAGE": "CELL V",
+            "TX POWER": "TX PWR",
+            "CAPACITY": "CAPA",
+            "DISTANCE": "DIST",
+            "ALTITUDE": "ALT",
+        }
+        label = short.get(label, label)
+
+        tx(surf, label, cx, y_lbl, L['C_CYAN'], F_SML, align="center")
+        if mode == 1:
+            pad = max(8, int(TW * 0.14))
+            draw_bar(surf, X + pad, Y + int(TH * 0.33), TW - 2*pad, int(TH * 0.50), pct, c)
+            tx(surf, val_s, cx, y_lbl + 14, c, F_SML, align="center")
+        elif mode == 2:
+            pad = max(8, int(TW * 0.14))
+            draw_gauge(surf, X + pad, Y + 6, TW - 2*pad, TH - 14, pct, c, val_s, unit_s)
+        else:
+            tx(surf, val_s, cx, y_val, c, F_MID, align="center")
+            if unit_s:
+                tx(surf, unit_s, cx, y_unit, L['C_DIM'], F_SML, align="center")
+            if sub_s:
+                tx(surf, sub_s, cx, y_sub, L['C_DIM'], F_SML, align="center")
     else:
-        tx(surf, val_s,  X+6, Y+L['TY_VAL'],  c,        F_MID)
-        tx(surf, unit_s, X+6, Y+L['TY_UNIT'], L['C_DIM'], F_SML)
-        if sub_s:
-            tx(surf, sub_s, X+6, Y+L['TY_SUB'], L['C_DIM'], F_SML)
+        tx(surf, label, X+6, Y+L['TY_LBL'], L['C_CYAN'], F_LBL)
+        if mode == 1:
+            draw_bar(surf, X, Y, TW, TH, pct, c)
+            tx(surf, val_s, X+6, Y+L['TY_LBL']+14, c, F_SML)
+        elif mode == 2:
+            draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s)
+        else:
+            tx(surf, val_s,  X+6, Y+L['TY_VAL'],  c,        F_MID)
+            tx(surf, unit_s, X+6, Y+L['TY_UNIT'], L['C_DIM'], F_SML)
+            if sub_s:
+                tx(surf, sub_s, X+6, Y+L['TY_SUB'], L['C_DIM'], F_SML)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 def draw_header(surf, mode, armed, fm_str):
-    tx(surf, "Air65", 80, 12, L['C_CYAN'], F_MID)
-    fr(surf, 262, 8, 2, 58, L['C_SIL_LO'])
+    link_active = isinstance(SIM.get("RQly"), (int, float)) and SIM.get("RQly", 0) > 0
+    model_name = "Air65" if link_active else "CRAFT"
+    tx_header(surf, model_name, 80, 10, L['C_CYAN'])
+    fr(surf, 300, 8, 2, 58, L['C_SIL_LO'])
     fm_col = L['C_ORANGE'] if armed else L['C_DIM']
-    tx(surf, fm_str if fm_str else "DISARMED", 272, 12, fm_col, F_MID)
-    fr(surf, 462, 8, 2, 58, L['C_SIL_LO'])
+    tx_header(surf, fm_str if fm_str else "MODE", 400, 10, fm_col, align="center")
+    fr(surf, 500, 8, 2, 58, L['C_SIL_LO'])
     if armed:
-        tx(surf, "ARMED",    474, 12, L['C_RED'],   F_MID)
+        tx_header(surf, "ARMED",    530, 10, L['C_RED'])
     else:
-        tx(surf, "DISARMED", 474, 12, L['C_GREEN'], F_MID)
+        tx_header(surf, "DISARMED", 530, 10, L['C_GREEN'])
     txv = SIM.get("tx-voltage", 0)
     if txv:
         col = L['C_GREEN'] if txv > 7.0 else L['C_RED']
@@ -554,16 +645,24 @@ def main():
         surf.fill(L['C_BG'])
         draw_pit(surf)
 
+        use_hex = L.get('USE_HEX')
         COLS = L['COLS'];  GAP = L['GAP']
         TW   = L['TW'];    TH  = L['TH']
         GX   = L['GX'];    GY  = L['GY']
 
         tiles = make_tiles(armed, fm_str, arm_ts())
         for i, d in enumerate(tiles):
-            c = i % COLS;  r = i // COLS
-            tx_pos = GX + GAP + c*(TW+GAP)
-            ty_pos = GY + GAP + r*(TH+GAP)
-            render_tile(surf, tx_pos, ty_pos, TW, TH, d[0], d, mode)
+            if use_hex:
+                c = i % L['HX_COLS']; r = i // L['HX_COLS']
+                tx_pos = L['HX_ORG_X'] + c * L['HX_STEP_X']
+                ty_pos = L['HX_ORG_Y'] + r * L['HX_STEP_Y'] + ((c % 2) * (L['HEX_H'] // 2))
+                tw = L['HEX_W']; th = L['HEX_H']
+            else:
+                c = i % COLS;  r = i // COLS
+                tx_pos = GX + GAP + c*(TW+GAP)
+                ty_pos = GY + GAP + r*(TH+GAP)
+                tw = TW; th = TH
+            render_tile(surf, tx_pos, ty_pos, tw, th, d[0], d, mode)
 
         draw_frame(surf)
         draw_header(surf, mode, armed, fm_str)
