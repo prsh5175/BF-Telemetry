@@ -398,12 +398,16 @@ local function drawBar(tx, ty, tw, th, pct, col)
 end
 
 -- =========================================================================
---  ARC GAUGE MODE
+--  ARC GAUGE MODE (Optimized for Performance)
 -- =========================================================================
 local _PI = 3.14159265
 
-local function drawArcSeg(cx, cy, r, a1, a2, col)
-  local steps = 12
+-- Cache system
+local _gaugeCache = {}
+local _gaugeBgCache = {}
+
+local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
+  steps = steps or 12
   local da = (a2 - a1) / steps
   local px, py
   for i = 0, steps do
@@ -415,23 +419,63 @@ local function drawArcSeg(cx, cy, r, a1, a2, col)
   end
 end
 
+-- Faster needle: triangle instead of 3 rectangles
+local function drawNeedleTriangle(cx, cy, r, angleRad, col)
+  local nx = cx + math.floor((r - 1) * math.cos(angleRad) + 0.5)
+  local ny = cy + math.floor((r - 1) * math.sin(angleRad) + 0.5)
+  
+  -- Perpendicular direction for needle width
+  local perpAngle = angleRad + _PI / 2
+  local w = 3
+  local wx = math.floor(w * math.cos(perpAngle))
+  local wy = math.floor(w * math.sin(perpAngle))
+  
+  -- Draw needle lines
+  lcd.drawLine(nx, ny, cx + wx, cy + wy, 0xFF, col)
+  lcd.drawLine(nx, ny, cx - wx, cy - wy, 0xFF, col)
+  lcd.drawLine(cx + wx, cy + wy, cx - wx, cy - wy, 0xFF, col)
+  
+  -- Center dot
+  lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
+  lcd.drawFilledRectangle(cx-1, cy-1, 3, 3, C_WHITE)
+end
+
 local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
   local cy = ty + th - 14
   local r  = math.floor(math.min(tw * 0.38, (th - 26) * 0.76))
   local aS = 210 * _PI / 180
   local aE = (210 - 300) * _PI / 180
-  drawArcSeg(cx, cy, r, aS, aE, C_SIL_LO)
-  drawArcSeg(cx, cy, r - 3, aS, aE, C_SIL_DK)
-  if pct and pct > 0 then
-    local aV = aS - (aS - aE) * math.min(pct, 100) / 100
-    drawArcSeg(cx, cy, r, aS, aV, col or C_GREEN)
-    local nx = cx + math.floor((r - 1) * math.cos(aV) + 0.5)
-    local ny = cy + math.floor((r - 1) * math.sin(aV) + 0.5)
-    lcd.drawFilledRectangle(nx-3, ny-3, 7, 7, C_SIL_DK)
-    lcd.drawFilledRectangle(nx-2, ny-2, 5, 5, C_SIL_HI)
-    lcd.drawFilledRectangle(nx-1, ny-1, 3, 3, C_WHITE)
+  
+  -- Create cache key based on gauge geometry
+  local cacheKey = string.format("%.0f_%.0f_%.0f", cx, cy, r)
+  
+  -- Draw background arc ONCE and cache it
+  if not _gaugeBgCache[cacheKey] then
+    drawArcSeg(cx, cy, r, aS, aE, C_SIL_LO)
+    drawArcSeg(cx, cy, r - 3, aS, aE, C_SIL_DK)
+    _gaugeBgCache[cacheKey] = true
   end
+  
+  -- Only redraw needle if percentage changed by >1%
+  local lastPct = _gaugeCache[cacheKey] or -999
+  local pctFloor = math.floor((pct or 0) + 0.5)
+  local lastPctFloor = math.floor(lastPct + 0.5)
+  
+  if math.abs(pctFloor - lastPctFloor) > 1 then
+    if pct and pct > 0 then
+      local aV = aS - (aS - aE) * math.min(pct, 100) / 100
+      drawArcSeg(cx, cy, r, aS, aV, col or C_GREEN)
+      drawNeedleTriangle(cx, cy, r, aV, col or C_GREEN)
+    else
+      -- Draw center dot only when pct is 0
+      lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
+      lcd.drawFilledRectangle(cx-1, cy-1, 3, 3, C_WHITE)
+    end
+    _gaugeCache[cacheKey] = pct or 0
+  end
+  
+  -- Text is cheap, always draw for responsiveness
   if val_str then
     lcd.drawText(cx, cy - 12, val_str, MIDSIZE+BOLD+CENTER+(col or C_WHITE))
   end

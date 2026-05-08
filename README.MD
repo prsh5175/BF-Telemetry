@@ -127,6 +127,24 @@ python launcher.py
 
 ---
 
+## Emulator Screenshots
+
+The images below show the desktop emulator in all three display modes:
+
+### Gauge Mode
+
+![BF Telemetry Emulator - Gauge Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
+
+### Bar Mode
+
+![BF Telemetry Emulator - Bar Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_bar.png)
+
+### Numeric Mode
+
+![BF Telemetry Emulator - Numeric Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_num.png)
+
+---
+
 ## License
 
 MIT — use freely, modify to suit your build.

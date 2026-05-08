@@ -462,10 +462,14 @@ local function drawBar(tx, ty, tw, th, pct, col)
 end
 
 -- =========================================================================
---  ARC GAUGE MODE
+--  ARC GAUGE MODE (Optimized for Performance)
 -- =========================================================================
 local _PI = 3.14159265
 local GAUGE_ARC_THICK = 96
+
+-- Cache system: store last rendered state per gauge instance
+local _gaugeCache = {}  -- { "key" = { lastPct, cx, cy, r, thick, aS, aE } }
+local _gaugeBgCache = {}  -- { "key" = true } - background rendered once
 
 local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
   steps = steps or 56
@@ -498,6 +502,37 @@ local function drawArcBand(cx, cy, r, a1, a2, coreCol, midCol, edgeCol, thick)
   end
 end
 
+-- Faster needle: draw triangle + center dot instead of 3 rectangles
+local function drawNeedleTriangle(cx, cy, r, angleRad, col)
+  local nx = cx + math.floor((r - 1) * math.cos(angleRad) + 0.5)
+  local ny = cy + math.floor((r - 1) * math.sin(angleRad) + 0.5)
+  
+  -- Perpendicular direction for needle width
+  local perpAngle = angleRad + _PI / 2
+  local w = 4
+  local wx = math.floor(w * math.cos(perpAngle))
+  local wy = math.floor(w * math.sin(perpAngle))
+  
+  -- Triangle: needle point + two base corners
+  local x1, y1 = nx, ny
+  local x2, y2 = cx + wx, cy + wy
+  local x3, y3 = cx - wx, cy - wy
+  
+  -- Draw filled triangle (using three lines as filled polygon)
+  lcd.drawFilledRectangle(math.min(x1,x2,x3)-1, math.min(y1,y2,y3)-1, 
+                          math.max(x1,x2,x3)-math.min(x1,x2,x3)+2,
+                          math.max(y1,y2,y3)-math.min(y1,y2,y3)+2, C_SIL_DK)
+  
+  -- Draw bright needle
+  lcd.drawLine(x1, y1, x2, y2, 0xFF, col)
+  lcd.drawLine(x1, y1, x3, y3, 0xFF, col)
+  lcd.drawLine(x2, y2, x3, y3, 0xFF, col)
+  
+  -- Center dot
+  lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
+  lcd.drawFilledRectangle(cx-1, cy-1, 3, 3, C_WHITE)
+end
+
 local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
 
@@ -518,21 +553,38 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   local aS = 210 * _PI / 180
   local aE = (210 - 300) * _PI / 180
 
-  -- Background track: thick and soft-edged.
-  drawArcBand(cx, cy, r, aS, aE, C_SIL_LO, C_SIL_DK, C_CF1, thick)
-
-  if pct and pct > 0 then
-    local aV = aS - (aS - aE) * math.min(pct, 100) / 100
-
-    -- Active track: bright center with faded edges (simulated alpha gradient).
-    drawArcBand(cx, cy, r, aS, aV, col or C_GREEN, C_SIL_MID, C_SIL_DK, thick)
-
-    local nx = cx + math.floor((r - 1) * math.cos(aV) + 0.5)
-    local ny = cy + math.floor((r - 1) * math.sin(aV) + 0.5)
-    lcd.drawFilledRectangle(nx-4, ny-4, 9, 9, C_SIL_DK)
-    lcd.drawFilledRectangle(nx-3, ny-3, 7, 7, C_SIL_HI)
-    lcd.drawFilledRectangle(nx-1, ny-1, 3, 3, C_WHITE)
+  -- Create cache key based on gauge geometry
+  local cacheKey = string.format("%.0f_%.0f_%.0f_%.0f", cx, cy, r, thick)
+  
+  -- Draw background arc ONCE and cache it
+  if not _gaugeBgCache[cacheKey] then
+    drawArcBand(cx, cy, r, aS, aE, C_SIL_LO, C_SIL_DK, C_CF1, thick)
+    _gaugeBgCache[cacheKey] = true
   end
+
+  -- Only redraw needle + filled arc if percentage changed by >1%
+  local lastPct = _gaugeCache[cacheKey] or -999
+  local pctFloor = math.floor((pct or 0) + 0.5)
+  local lastPctFloor = math.floor(lastPct + 0.5)
+  
+  if math.abs(pctFloor - lastPctFloor) > 1 then
+    if pct and pct > 0 then
+      local aV = aS - (aS - aE) * math.min(pct, 100) / 100
+
+      -- Active track: bright center with faded edges
+      drawArcBand(cx, cy, r, aS, aV, col or C_GREEN, C_SIL_MID, C_SIL_DK, thick)
+
+      -- Draw optimized needle (triangle is faster than 3 rectangles)
+      drawNeedleTriangle(cx, cy, r, aV, col or C_GREEN)
+    else
+      -- Draw center dot only when pct is 0
+      lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
+      lcd.drawFilledRectangle(cx-1, cy-1, 3, 3, C_WHITE)
+    end
+    _gaugeCache[cacheKey] = pct or 0
+  end
+  
+  -- Text is cheap, always draw for responsiveness
   if val_str then
     lcd.drawText(cx, cy - 12, val_str, MIDSIZE+BOLD+CENTER+(col or C_WHITE))
   end
