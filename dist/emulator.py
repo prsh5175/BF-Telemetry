@@ -3,13 +3,19 @@
 BF Telemetry Widget Emulator
 Reads layout constants and colors directly from main.lua.
 Keys: N=NUM  B=BAR  G=GAUGE  A=arm/disarm  R=reload lua  Q=quit
+Mouse: click a tile to open metric picker, click metric row to assign tile
 Place BFTelemEmulator.exe next to main.lua, OR anywhere - it will show
 a file-picker dialog on first launch and remember the path.
 """
-import re, os, sys, math, pygame
+import re, os, sys, math, json, pygame
 
 W, H = 800, 480
 FPS  = 15
+MENU_W = 320
+MENU_ROW_H = 22
+MENU_TITLE_H = 28
+MENU_PAD = 8
+CLICK_DEBOUNCE_MS = 140
 
 # ── Lua file discovery ────────────────────────────────────────────────────────
 def get_base_dir():
@@ -103,6 +109,49 @@ def find_cf_image(lua_path):
         if os.path.exists(p):
             return p
     return None
+
+def tile_map_cfg_path():
+    return os.path.join(get_base_dir(), 'bftelem_tilemap.json')
+
+def _tile_map_key(lua_path):
+    return os.path.abspath(lua_path or "main.lua")
+
+def load_tile_slots(lua_path, count):
+    slots = list(range(count))
+    try:
+        with open(tile_map_cfg_path(), encoding='utf-8') as f:
+            raw = json.load(f)
+        arr = raw.get(_tile_map_key(lua_path)) if isinstance(raw, dict) else None
+        if isinstance(arr, list):
+            for i in range(min(count, len(arr))):
+                v = arr[i]
+                if isinstance(v, int):
+                    slots[i] = max(0, min(count - 1, v))
+    except Exception:
+        pass
+    return slots
+
+def save_tile_slots(lua_path, slots, count):
+    out = [max(0, min(count - 1, int(v))) for v in slots[:count]]
+    while len(out) < count:
+        out.append(len(out))
+
+    path = tile_map_cfg_path()
+    data = {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            data = raw
+    except Exception:
+        pass
+
+    key = _tile_map_key(lua_path)
+    if data.get(key) == out:
+        return
+    data[key] = out
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
 
 # ── Lua parser ────────────────────────────────────────────────────────────────
 def parse_lua(path):
@@ -377,6 +426,88 @@ def draw_tile(surf, X, Y, TW, TH):
     fr(surf, X+1,  Y+TH-2,  6, 1, L['C_CYAN'])
     fr(surf, X+1,  Y+TH-7,  1, 6, L['C_CYAN'])
 
+def hit_flat_hex(px, py, X, Y, TW, TH):
+    if px < X or px > (X + TW - 1) or py < Y or py > (Y + TH - 1):
+        return False
+    hh = TH / 2.0
+    if hh <= 0:
+        return False
+    y_mid = Y + hh
+    q = TW / 4.0
+    dy = abs(py - y_mid) / hh
+    if dy > 1.0:
+        return False
+    inset = q * dy
+    x_l = X + inset
+    x_r = X + TW - 1 - inset
+    return x_l <= px <= x_r
+
+def tile_positions(tile_count):
+    out = []
+    if L.get('USE_HEX'):
+        for i in range(tile_count):
+            c = i % L['HX_COLS']
+            r = i // L['HX_COLS']
+            tx_pos = L['HX_ORG_X'] + c * L['HX_STEP_X']
+            ty_pos = L['HX_ORG_Y'] + r * L['HX_STEP_Y'] + ((c % 2) * (L['HEX_H'] // 2))
+            out.append((tx_pos, ty_pos, L['HEX_W'], L['HEX_H']))
+    else:
+        cols = L['COLS']
+        gap = L['GAP']
+        tw = L['TW']
+        th = L['TH']
+        gx = L['GX']
+        gy = L['GY']
+        for i in range(tile_count):
+            c = i % cols
+            r = i // cols
+            tx_pos = gx + gap + c * (tw + gap)
+            ty_pos = gy + gap + r * (th + gap)
+            out.append((tx_pos, ty_pos, tw, th))
+    return out
+
+def tile_at_point(px, py, rects):
+    for i, (x, y, w, h) in enumerate(rects):
+        if L.get('USE_HEX'):
+            if hit_flat_hex(px, py, x, y, w, h):
+                return i
+        else:
+            if x <= px <= x + w - 1 and y <= py <= y + h - 1:
+                return i
+    return None
+
+def menu_bounds(metric_count):
+    h = MENU_TITLE_H + MENU_PAD * 2 + metric_count * MENU_ROW_H
+    x = (W - MENU_W) // 2
+    y = (H - h) // 2
+    return x, y, MENU_W, h
+
+def menu_metric_at(px, py, metric_count):
+    x, y, w, h = menu_bounds(metric_count)
+    if px < x or px > (x + w - 1) or py < y or py > (y + h - 1):
+        return None
+    row_y = y + MENU_TITLE_H + MENU_PAD
+    for i in range(metric_count):
+        if row_y <= py < (row_y + MENU_ROW_H):
+            return i
+        row_y += MENU_ROW_H
+    return None
+
+def draw_metric_menu(surf, labels, selected_idx, tile_idx):
+    x, y, w, h = menu_bounds(len(labels))
+    fr(surf, x, y, w, h, L['C_CF1'])
+    pygame.draw.rect(surf, L['C_SIL_HI'], (x, y, w, h), 1)
+    fr(surf, x + 1, y + 1, w - 2, MENU_TITLE_H, L['C_SIL_DK'])
+    tx(surf, f"Tile {tile_idx + 1}: Select Metric", x + 8, y + 6, L['C_WHITE'], F_SML)
+
+    row_y = y + MENU_TITLE_H + MENU_PAD
+    for i, label in enumerate(labels):
+        bg = L['C_HILIGHT'] if i == selected_idx else L['C_TILE']
+        fr(surf, x + MENU_PAD, row_y, w - MENU_PAD * 2, MENU_ROW_H - 2, bg)
+        pygame.draw.rect(surf, L['C_SIL_LO'], (x + MENU_PAD, row_y, w - MENU_PAD * 2, MENU_ROW_H - 2), 1)
+        tx(surf, label, x + MENU_PAD + 6, row_y + 4, L['C_WHITE'], F_SML)
+        row_y += MENU_ROW_H
+
 # ── Bar ───────────────────────────────────────────────────────────────────────
 def draw_bar(surf, X, Y, TW, TH, pct, c):
     bx = X+6; by = Y+30; bw = TW-12; bh = TH-38
@@ -500,7 +631,7 @@ SIM = {
     "Alt":  22.4,
     "TPWR": 250,
     "RFMD": 6,
-    "GSpd": 45.0,
+    "Dist": 145.0,
     "thr":  35,
     "tx-voltage": 7.8,
     "FM":   "ANGLE",
@@ -522,7 +653,7 @@ def make_tiles(armed, fm_str, arm_timer):
     lq   = SIM["RQly"];  volt = SIM["RxBt"]; curr = SIM["Curr"]
     r1   = SIM["1RSS"];  r2   = SIM["2RSS"]; capa = SIM["Capa"]
     alt  = SIM["Alt"];   tpwr = SIM["TPWR"]; rfmd = SIM["RFMD"]
-    gspd = SIM["GSpd"];  thr  = SIM["thr"]
+    dist = SIM["Dist"];  thr  = SIM["thr"]
     nc = 4; fV = 4.2; eV = 3.30; wV = 3.6; kV = 3.4
     cV   = volt / nc if volt else None
     pb   = max(0, min(100, (cV-eV)/(fV-eV)*100)) if cV else None
@@ -530,8 +661,8 @@ def make_tiles(armed, fm_str, arm_timer):
     RFM  = {0:"4Hz",1:"25Hz",2:"50Hz",3:"100Hz",4:"150Hz",5:"200Hz",
             6:"250Hz",7:"500Hz",8:"F1000",9:"F500",10:"DVDA"}
     t_pct = max(0, min(100, int((thr+1024)/20.48))) if thr is not None else None
-    gc    = (L['C_RED'] if (gspd or 0) >= 100 else
-             L['C_ORANGE'] if (gspd or 0) >= 60 else L['C_GREEN'])
+    distc = (L['C_RED'] if (dist or 0) >= 500 else
+             L['C_ORANGE'] if (dist or 0) >= 200 else L['C_GREEN'])
     r1c   = (L['C_GREEN'] if r1 and r1>-65 else
              L['C_YELLOW'] if r1 and r1>-85 else L['C_RED'])
     tpc   = (L['C_GREEN'] if tpwr and tpwr<=100 else
@@ -560,8 +691,8 @@ def make_tiles(armed, fm_str, arm_timer):
             min(100,tpwr/20) if tpwr else None, tpc, None),
         ("ALTITUDE",     f"{alt:.1f}",      "metres",
             max(0,min(100,alt/5)) if alt else None, L['C_WHITE'], None),
-        ("GPS SPEED",    f"{gspd:.0f}" if gspd else "---", "km/h",
-            min(100,gspd/1.2) if gspd else None, gc, None),
+        ("DISTANCE",     f"{dist:.0f}" if dist else "---", "metres",
+            min(100,dist/10) if dist else None, distc, None),
         ("RF MODE",      RFM.get(int(rfmd or 0), "?"), "RF mode",
             None,  L['C_WHITE'],     None),
     ]
@@ -609,6 +740,10 @@ def main():
     reloaded_msg  = 0    # ticks when last reload happened (for brief flash)
     _last_mtime   = os.path.getmtime(LUA_PATH)
     _mtime_check  = 0    # ticks of last mtime poll
+    menu_open = False
+    menu_tile_idx = None
+    last_click_ms = 0
+    tile_slots = load_tile_slots(LUA_PATH, 12)
 
     running = True
     while running:
@@ -627,6 +762,31 @@ def main():
                     L = make_layout(parse_lua(LUA_PATH))
                     _last_mtime  = os.path.getmtime(LUA_PATH)
                     reloaded_msg = pygame.time.get_ticks()
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                now_ms = pygame.time.get_ticks()
+                if now_ms - last_click_ms < CLICK_DEBOUNCE_MS:
+                    continue
+                last_click_ms = now_ms
+                mx, my = ev.pos
+
+                base_tiles = make_tiles(armed, fm_str, arm_ts())
+                if len(tile_slots) != len(base_tiles):
+                    tile_slots = load_tile_slots(LUA_PATH, len(base_tiles))
+
+                if menu_open and menu_tile_idx is not None:
+                    metric_idx = menu_metric_at(mx, my, len(base_tiles))
+                    if metric_idx is not None:
+                        tile_slots[menu_tile_idx] = metric_idx
+                        save_tile_slots(LUA_PATH, tile_slots, len(base_tiles))
+                    menu_open = False
+                    menu_tile_idx = None
+                    continue
+
+                rects = tile_positions(len(tile_slots))
+                hit_idx = tile_at_point(mx, my, rects)
+                if hit_idx is not None:
+                    menu_open = True
+                    menu_tile_idx = hit_idx
 
         # ── Auto-reload when file changes (poll every ~1 s) ──
         now = pygame.time.get_ticks()
@@ -645,24 +805,25 @@ def main():
         surf.fill(L['C_BG'])
         draw_pit(surf)
 
-        use_hex = L.get('USE_HEX')
-        COLS = L['COLS'];  GAP = L['GAP']
-        TW   = L['TW'];    TH  = L['TH']
-        GX   = L['GX'];    GY  = L['GY']
+        base_tiles = make_tiles(armed, fm_str, arm_ts())
+        if len(tile_slots) != len(base_tiles):
+            tile_slots = load_tile_slots(LUA_PATH, len(base_tiles))
+        rects = tile_positions(len(tile_slots))
 
-        tiles = make_tiles(armed, fm_str, arm_ts())
-        for i, d in enumerate(tiles):
-            if use_hex:
-                c = i % L['HX_COLS']; r = i // L['HX_COLS']
-                tx_pos = L['HX_ORG_X'] + c * L['HX_STEP_X']
-                ty_pos = L['HX_ORG_Y'] + r * L['HX_STEP_Y'] + ((c % 2) * (L['HEX_H'] // 2))
-                tw = L['HEX_W']; th = L['HEX_H']
-            else:
-                c = i % COLS;  r = i // COLS
-                tx_pos = GX + GAP + c*(TW+GAP)
-                ty_pos = GY + GAP + r*(TH+GAP)
-                tw = TW; th = TH
+        for i, (tx_pos, ty_pos, tw, th) in enumerate(rects):
+            mapped = tile_slots[i] if i < len(tile_slots) else i
+            mapped = max(0, min(len(base_tiles) - 1, mapped))
+            d = base_tiles[mapped]
             render_tile(surf, tx_pos, ty_pos, tw, th, d[0], d, mode)
+
+        if menu_open and menu_tile_idx is not None:
+            if not (0 <= menu_tile_idx < len(tile_slots)):
+                menu_open = False
+                menu_tile_idx = None
+            else:
+                current_idx = max(0, min(len(base_tiles) - 1, tile_slots[menu_tile_idx]))
+                labels = [t[0] for t in base_tiles]
+                draw_metric_menu(surf, labels, current_idx, menu_tile_idx)
 
         draw_frame(surf)
         draw_header(surf, mode, armed, fm_str)
@@ -670,7 +831,7 @@ def main():
         # bottom HUD bar
         hy = H - 14
         tx(surf, f"lua: {LUA_PATH}", 4, hy, L['C_DIM'], F_LBL)
-        tx(surf, "auto-reload on save  |  N=num  B=bar  G=gauge  A=arm  Q=quit",
+        tx(surf, "click tile: assign metric  |  N=num  B=bar  G=gauge  A=arm  Q=quit",
            W-4, hy, L['C_DIM'], F_LBL, align="right")
 
         # brief "RELOADED" flash

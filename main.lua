@@ -11,6 +11,18 @@ local OPTIONS = {
   { "Theme",   VALUE,  0,  0,  3 },
   { "ThrOn",   VALUE,  5,  0, 50 },
   { "ArmSrc", SOURCE,  0 },
+  { "T1",      VALUE,  0,  0, 11 },
+  { "T2",      VALUE,  1,  0, 11 },
+  { "T3",      VALUE,  2,  0, 11 },
+  { "T4",      VALUE,  3,  0, 11 },
+  { "T5",      VALUE,  4,  0, 11 },
+  { "T6",      VALUE,  5,  0, 11 },
+  { "T7",      VALUE,  6,  0, 11 },
+  { "T8",      VALUE,  7,  0, 11 },
+  { "T9",      VALUE,  8,  0, 11 },
+  { "T10",     VALUE,  9,  0, 11 },
+  { "T11",     VALUE, 10,  0, 11 },
+  { "T12",     VALUE, 11,  0, 11 },
 }
 
 local SN_LQ    = "RQly"
@@ -313,6 +325,35 @@ local HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
 local HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
 local HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
 
+local MENU_W = 380
+local MENU_X = math.floor((800 - MENU_W) / 2)
+local MENU_ROW_H = 38
+local MENU_TITLE_H = 28
+local MENU_PAD = 8
+local MENU_MAX_ROWS = 8
+local MENU_SCROLL_THRESHOLD = 10
+
+local _tileSlots = {}
+local _touchUi = {
+  open = false,
+  tile = nil,
+  lastTap = 0,
+  isDown = false,
+  downKind = nil,
+  downIndex = nil,
+  downX = nil,
+  downY = nil,
+  downMoved = false,
+  scrollStart = 0,
+  menuScroll = 0,
+}
+
+local function clampInt(v, lo, hi)
+  if v < lo then return lo end
+  if v > hi then return hi end
+  return v
+end
+
 -- =========================================================================
 --  CARBON FIBER FRAME
 --  Draw using Y-axis horizontal slices (cheap) instead of per-column loops.
@@ -593,6 +634,57 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   end
 end
 
+local function hitFlatTopHex(px, py, tx, ty, tw, th)
+  if px < tx or px > (tx + tw - 1) or py < ty or py > (ty + th - 1) then
+    return false
+  end
+  local hh = th / 2
+  if hh <= 0 then return false end
+  local yMid = ty + hh
+  local q = tw / 4
+  local dyNorm = math.abs(py - yMid) / hh
+  if dyNorm > 1 then return false end
+  local inset = q * dyNorm
+  local xL = tx + inset
+  local xR = tx + tw - 1 - inset
+  return px >= xL and px <= xR
+end
+
+local function tileRect(i)
+  local c = (i - 1) % HX_COLS
+  local r = math.floor((i - 1) / HX_COLS)
+  local tx = HX_ORG_X + c * HX_STEP_X
+  local ty = HX_ORG_Y + r * HX_STEP_Y + ((c % 2) * math.floor(HEX_H / 2))
+  return tx, ty, HEX_W, HEX_H
+end
+
+local function tileAtPoint(px, py, tileCount)
+  for i = 1, tileCount do
+    local tx, ty, tw, th = tileRect(i)
+    if hitFlatTopHex(px, py, tx, ty, tw, th) then
+      return i
+    end
+  end
+  return nil
+end
+
+local function touchXY(touchState)
+  if type(touchState) ~= "table" then return nil, nil end
+  local x = touchState.x or touchState.X or touchState[1]
+  local y = touchState.y or touchState.Y or touchState[2]
+  if type(x) ~= "number" or type(y) ~= "number" then return nil, nil end
+  return x, y
+end
+
+local function canTapNow()
+  local now = getTime() or 0
+  if (now - (_touchUi.lastTap or 0)) < 18 then
+    return false
+  end
+  _touchUi.lastTap = now
+  return true
+end
+
 -- =========================================================================
 --  TILE DATA
 -- =========================================================================
@@ -670,7 +762,7 @@ local function tdRFMode(o)
   return { val=rfModeStr(v), unit="RF mode", pct=nil, col=C_WHITE }
 end
 
-local TILES = {
+local METRICS = {
   { "LINK QUALITY", tdLQ       },
   { "BATTERY",      tdBatt     },
   { "CURRENT",      tdCurrent  },
@@ -684,6 +776,247 @@ local TILES = {
   { "DISTANCE",      tdDist     },
   { "RF MODE",      tdRFMode   },
 }
+
+local function syncTileSlotsFromOptions(options)
+  _tileSlots = _tileSlots or {}
+  for i = 1, #METRICS do
+    local key = "T" .. i
+    local raw = options and options[key]
+    local idx0 = (type(raw) == "number") and math.floor(raw) or (i - 1)
+    _tileSlots[i] = clampInt(idx0, 0, #METRICS - 1) + 1
+  end
+end
+
+local function setSequentialTileDefaults(options)
+  _tileSlots = _tileSlots or {}
+  for i = 1, #METRICS do
+    _tileSlots[i] = i
+    if options then
+      options["T" .. i] = i - 1
+    end
+  end
+end
+
+local function optionsAllLinkQ(options)
+  if type(options) ~= "table" then return false end
+  for i = 1, #METRICS do
+    if options["T" .. i] ~= 0 then
+      return false
+    end
+  end
+  return true
+end
+
+local function tileStorageKey()
+  local modelName = "default"
+  if model and model.getInfo then
+    local info = model.getInfo()
+    if info and info.name and info.name ~= "" then
+      modelName = tostring(info.name)
+    end
+  end
+  return "BFTelem.TileMap." .. modelName
+end
+
+local function saveTileSlotsToStorage(options)
+  if not storage or not storage.write then return end
+  local out = {}
+  local mode = clampInt(math.floor((options and options.Mode) or 0), 0, 2)
+  for i = 1, #METRICS do
+    out[i] = (_tileSlots[i] or i) - 1
+  end
+  out.mode = mode
+  pcall(storage.write, tileStorageKey(), out)
+end
+
+local function loadTileSlotsFromStorage(options)
+  if not storage or not storage.read then return end
+  local ok, saved = pcall(storage.read, tileStorageKey())
+  if not ok or type(saved) ~= "table" then return false end
+
+  local loadedAny = false
+  for i = 1, #METRICS do
+    local raw = saved[i]
+    if type(raw) == "number" then
+      local idx1 = clampInt(math.floor(raw), 0, #METRICS - 1) + 1
+      _tileSlots[i] = idx1
+      if options then
+        options["T" .. i] = idx1 - 1
+      end
+      loadedAny = true
+    end
+  end
+
+  if options and type(saved.mode) == "number" then
+    options.Mode = clampInt(math.floor(saved.mode), 0, 2)
+  end
+
+  return loadedAny
+end
+
+local function menuBounds()
+  local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+  local h = MENU_TITLE_H + MENU_PAD * 2 + visibleRows * MENU_ROW_H + MENU_ROW_H
+  local y = math.floor((480 - h) / 2)
+  return MENU_X, y, MENU_W, h
+end
+
+local function drawMetricMenu()
+  if not _touchUi.open or not _touchUi.tile then return end
+  local mx, my, mw, mh = menuBounds()
+  lcd.drawFilledRectangle(mx, my, mw, mh, C_CF1)
+  lcd.drawRectangle(mx, my, mw, mh, C_SIL_HI)
+  lcd.drawFilledRectangle(mx + 1, my + 1, mw - 2, MENU_TITLE_H, C_SIL_DK)
+
+  local title = string.format("Tile %d: Select Metric", _touchUi.tile)
+  lcd.drawText(mx + 8, my + 6, title, SMLSIZE + C_WHITE)
+
+  local currentIdx = _tileSlots[_touchUi.tile] or _touchUi.tile
+  local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+  local maxScroll = math.max(0, #METRICS - visibleRows)
+  local scroll = clampInt(_touchUi.menuScroll or 0, 0, maxScroll)
+  _touchUi.menuScroll = scroll
+  local rowY = my + MENU_TITLE_H + MENU_PAD
+  for row = 1, visibleRows do
+    local i = scroll + row
+    local metric = METRICS[i]
+    if not metric then break end
+    local bg = C_TILE
+    if i == currentIdx then
+      bg = C_HILIGHT
+    end
+    lcd.drawFilledRectangle(mx + MENU_PAD, rowY, mw - MENU_PAD * 2, MENU_ROW_H - 2, bg)
+    lcd.drawRectangle(mx + MENU_PAD, rowY, mw - MENU_PAD * 2, MENU_ROW_H - 2, C_SIL_LO)
+    lcd.drawText(mx + MENU_PAD + 8, rowY + 11, metric[1], SMLSIZE + C_WHITE)
+    rowY = rowY + MENU_ROW_H
+  end
+
+  if scroll > 0 then
+    lcd.drawText(mx + mw - 16, my + 4, "^", SMLSIZE + C_SIL_HI)
+  end
+  if scroll < maxScroll then
+    lcd.drawText(mx + mw - 16, my + mh - 14, "v", SMLSIZE + C_SIL_HI)
+  end
+
+  local resetY = my + mh - MENU_ROW_H
+  lcd.drawFilledRectangle(mx + MENU_PAD, resetY, mw - MENU_PAD * 2, MENU_ROW_H - 2, C_ORANGE)
+  lcd.drawRectangle(mx + MENU_PAD, resetY, mw - MENU_PAD * 2, MENU_ROW_H - 2, C_SIL_HI)
+  lcd.drawText(mx + MENU_PAD + 8, resetY + 11, "RESET LAYOUT", SMLSIZE + C_WHITE)
+end
+
+local function menuMetricAt(mx, my)
+  local x, y, w, h = menuBounds()
+  if mx < x or mx > (x + w - 1) or my < y or my > (y + h - 1) then return nil end
+  local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+  local maxScroll = math.max(0, #METRICS - visibleRows)
+  local scroll = clampInt(_touchUi.menuScroll or 0, 0, maxScroll)
+  local rowY = y + MENU_TITLE_H + MENU_PAD
+  for row = 1, visibleRows do
+    if my >= rowY and my < (rowY + MENU_ROW_H) then
+      return scroll + row
+    end
+    rowY = rowY + MENU_ROW_H
+  end
+  local resetY = y + h - MENU_ROW_H
+  if my >= resetY and my < (resetY + MENU_ROW_H) then
+    return "RESET"
+  end
+  return nil
+end
+
+local function resetTouchDownState()
+  _touchUi.downKind = nil
+  _touchUi.downIndex = nil
+  _touchUi.downX = nil
+  _touchUi.downY = nil
+  _touchUi.downMoved = false
+  _touchUi.scrollStart = _touchUi.menuScroll or 0
+end
+
+local function handleTouch(widget, touchState)
+  local x, y = touchXY(touchState)
+  local isDown = (x ~= nil and y ~= nil)
+
+  if isDown then
+    if not _touchUi.isDown then
+      if _touchUi.open and _touchUi.tile then
+        local x0, y0, w0, h0 = menuBounds()
+        if x >= x0 and x <= (x0 + w0 - 1) and y >= y0 and y <= (y0 + h0 - 1) then
+          _touchUi.downKind = "menu"
+          _touchUi.downIndex = menuMetricAt(x, y)
+          _touchUi.downX = x
+          _touchUi.downY = y
+          _touchUi.downMoved = false
+          _touchUi.scrollStart = _touchUi.menuScroll or 0
+        else
+          resetTouchDownState()
+        end
+      else
+        local tile = tileAtPoint(x, y, #_tileSlots)
+        if tile then
+          _touchUi.downKind = "tile"
+          _touchUi.downIndex = tile
+          _touchUi.downX = x
+          _touchUi.downY = y
+          _touchUi.downMoved = false
+        else
+          resetTouchDownState()
+        end
+      end
+    else
+      if _touchUi.downKind == "menu" and _touchUi.downY then
+        local dy = y - _touchUi.downY
+        if math.abs(dy) >= MENU_SCROLL_THRESHOLD then
+          _touchUi.downMoved = true
+          local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+            local maxScroll = math.max(0, #METRICS - visibleRows)
+            local rawRows = (_touchUi.downY - y) / MENU_ROW_H
+            local deltaRows
+            if rawRows >= 0 then
+              deltaRows = math.floor(rawRows + 0.5)
+            else
+              deltaRows = math.ceil(rawRows - 0.5)
+            end
+          _touchUi.menuScroll = clampInt((_touchUi.scrollStart or 0) + deltaRows, 0, maxScroll)
+        end
+      end
+    end
+    _touchUi.isDown = true
+    return
+  end
+
+  if not _touchUi.isDown then return end
+  _touchUi.isDown = false
+
+  local downKind = _touchUi.downKind
+  local downIndex = _touchUi.downIndex
+  local downMoved = _touchUi.downMoved
+  resetTouchDownState()
+
+  if downKind == "tile" and downIndex and not downMoved then
+    if not canTapNow() then return end
+    _touchUi.open = true
+    _touchUi.tile = downIndex
+    _touchUi.menuScroll = 0
+    return
+  end
+
+  if downKind == "menu" and downIndex and not downMoved and _touchUi.open and _touchUi.tile then
+    if not canTapNow() then return end
+    if downIndex == "RESET" then
+      setSequentialTileDefaults(widget and widget.options)
+      saveTileSlotsToStorage(widget and widget.options)
+    else
+      _tileSlots[_touchUi.tile] = downIndex
+      if widget and widget.options then
+        widget.options["T" .. _touchUi.tile] = downIndex - 1
+      end
+      saveTileSlotsToStorage(widget and widget.options)
+    end
+    _touchUi.open = false
+    _touchUi.tile = nil
+  end
+end
 
 -- =========================================================================
 --  TILE RENDERER
@@ -775,12 +1108,11 @@ end
 -- =========================================================================
 local function drawGrid(opts)
   local mode = opts.Mode or 0
-  for i, t in ipairs(TILES) do
-    local c  = (i-1) % HX_COLS
-    local r  = math.floor((i-1) / HX_COLS)
-    local tx = HX_ORG_X + c * HX_STEP_X
-    local ty = HX_ORG_Y + r * HX_STEP_Y + ((c % 2) * math.floor(HEX_H / 2))
-    renderTile(tx, ty, HEX_W, HEX_H, t[1], t[2](opts), mode)
+  for i = 1, #_tileSlots do
+    local metricIdx = _tileSlots[i] or i
+    local metric = METRICS[metricIdx] or METRICS[i]
+    local tx, ty, tw, th = tileRect(i)
+    renderTile(tx, ty, tw, th, metric[1], metric[2](opts), mode)
   end
 end
 
@@ -793,20 +1125,54 @@ local function create(zone, options)
   _armStart = nil
   _lastArmed = false
   _lastThrUp = false
+  syncTileSlotsFromOptions(options)
+  local loaded = loadTileSlotsFromStorage(options)
+  if not loaded and optionsAllLinkQ(options) then
+    setSequentialTileDefaults(options)
+    saveTileSlotsToStorage(options)
+  end
+  _touchUi.open = false
+  _touchUi.tile = nil
+  _touchUi.lastTap = 0
+  _touchUi.isDown = false
+  _touchUi.downKind = nil
+  _touchUi.downIndex = nil
+  _touchUi.downX = nil
+  _touchUi.downY = nil
+  _touchUi.downMoved = false
+  _touchUi.scrollStart = 0
+  _touchUi.menuScroll = 0
   return { zone = zone, options = options }
 end
 local function update(widget, options)
   widget.options = options
+
+  -- Some radios provide all-zero tile options after reboot; if we detect that
+  -- shape, restore persisted tiles/mode before syncing back into runtime state.
+  if optionsAllLinkQ(options) then
+    local loaded = loadTileSlotsFromStorage(options)
+    if not loaded then
+      setSequentialTileDefaults(options)
+    end
+  end
+
   initColors(options and options.Theme)
+  syncTileSlotsFromOptions(options)
+  saveTileSlotsToStorage(options)
 end
 local function background(widget)      tickArmTimer(widget.options) end
 
 local function refresh(widget, event, touchState)
   initColors(widget.options and widget.options.Theme)
+  if #_tileSlots ~= #METRICS then
+    syncTileSlotsFromOptions(widget.options)
+  end
+  handleTouch(widget, touchState)
   tickArmTimer(widget.options)
   lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
   drawPit()
   drawGrid(widget.options)
+  drawMetricMenu()
   drawCarbonFrame()
   drawHeader(widget.options)
 end
