@@ -28,6 +28,7 @@ build/
 dist/*.exe
 dist/*.app
 dist/bftelem_path.txt
+dist/bftelem_tilemap.json
 *.spec
 
 # IDE metadata

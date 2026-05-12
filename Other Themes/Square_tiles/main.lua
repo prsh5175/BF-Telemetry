@@ -1,5 +1,6 @@
--- BF Telemetry Widget v3 - Carbon Frame + Recessed Tile Layout
--- EdgeTX 2.12, Lua 5.3, TX16S MK III 800x480
+-- BF Telemetry Widget (Square Tiles theme)
+-- EdgeTX 2.12+, Lua 5.3, TX16S MK III 800x480.
+-- This is the square-grid alternative to the default hex main.lua.
 
 local OPTIONS = {
   { "Cells",   VALUE,  4,  1,  8 },
@@ -380,10 +381,11 @@ end
 --  BAR MODE
 -- =========================================================================
 local function drawBar(tx, ty, tw, th, pct, col)
-  local bx = tx + 6
-  local by = ty + 30
-  local bw = tw - 12
-  local bh = th - 38
+  local bx = tx
+  local by = ty
+  local bw = tw
+  local bh = th
+  if bw < 8 or bh < 10 then return end
   lcd.drawFilledRectangle(bx, by, bw, bh, C_SIL_DK)
   local fw = math.floor(bw * math.max(0, math.min(1, (pct or 0)/100)))
   if fw > 0 then
@@ -391,10 +393,6 @@ local function drawBar(tx, ty, tw, th, pct, col)
     lcd.drawFilledRectangle(bx+fw-2, by, 2, bh, C_SIL_HI)
   end
   lcd.drawRectangle(bx, by, bw, bh, C_SIL_MID)
-  if pct then
-    lcd.drawText(tx + tw/2, by + bh/2 - 8,
-      string.format("%d%%", math.floor(pct)), MIDSIZE+BOLD+CENTER+(col or C_WHITE))
-  end
 end
 
 -- =========================================================================
@@ -577,14 +575,105 @@ local TILES = {
 }
 
 -- =========================================================================
---  TILE RENDERER
+--  SIDE BATTERY BARS
 -- =========================================================================
+local function cBattPct(p)
+  if p == nil then return C_DIM end
+  if p >= 60 then return C_GREEN end
+  if p >= 30 then return C_YELLOW end
+  return C_RED
+end
+
+local function pctFromTxVoltage(v)
+  if type(v) ~= "number" or v <= 0 then return nil end
+  return math.max(0, math.min(100, (v - 6.4) / (8.4 - 6.4) * 100))
+end
+
+local function pctFromRxCellVoltage(volt, cells)
+  if type(volt) ~= "number" or volt <= 0 then return nil end
+  local nc = (type(cells) == "number" and cells > 0) and cells or 4
+  local cV = volt / nc
+  return math.max(0, math.min(100, (cV - 3.3) / (4.2 - 3.3) * 100))
+end
+
+local function drawSideBar(x, y, w, h, pct, label)
+  local labelTop  = y + 2
+  local barTop    = y + 40
+  local pctY      = y + h - 10
+  local barBottom = pctY - 4
+  local textCx    = x + math.floor(w / 2)
+
+  local labelStr = tostring(label or "")
+  local line1, line2 = string.match(labelStr, "^(%S+)%s+(%S+)$")
+  if line1 then
+    lcd.drawText(textCx, labelTop,      line1, SMLSIZE + CENTER + C_SIL_HI)
+    lcd.drawText(textCx, labelTop + 12, line2, SMLSIZE + CENTER + C_SIL_HI)
+  else
+    lcd.drawText(textCx, labelTop + 6,  labelStr, SMLSIZE + CENTER + C_SIL_HI)
+    barTop = y + 36
+  end
+
+  local barH = barBottom - barTop
+  if barH < 30 then return end
+
+  local segCount = 10
+  local gap      = 2
+  local segH     = math.floor((barH - gap * (segCount - 1)) / segCount)
+  if segH < 3 then segH = 3 end
+  local lit = pct and math.floor((pct / 100) * segCount + 0.5) or 0
+  lit = math.max(0, math.min(segCount, lit))
+
+  lcd.drawRectangle(x - 2, barTop - 2, w + 4, barH + 4, C_SIL_LO)
+
+  for i = 1, segCount do
+    local idxFromBottom = segCount - i + 1
+    local sy  = barTop + (i - 1) * (segH + gap)
+    local on  = idxFromBottom <= lit
+    local col = on and cBattPct((idxFromBottom / segCount) * 100) or C_SIL_DK
+    lcd.drawFilledRectangle(x, sy, w, segH, col)
+    lcd.drawRectangle(x, sy, w, segH, C_CF1)
+  end
+
+  local ptxt = pct and string.format("%d%%", math.floor(pct + 0.5)) or "---"
+  lcd.drawText(textCx, pctY, ptxt, SMLSIZE + CENTER + (pct and cBattPct(pct) or C_DIM))
+end
+
+local function drawSideBatteryBars(o)
+  local railW = FRM_L
+  if railW < 12 then return end
+
+  local y = TOP_MID + 16
+  local h = 480 - TOP_MID - FRM_B - 34
+  if h < 80 then return end
+
+  local txv   = getValue("tx-voltage")
+  local txPct = pctFromTxVoltage(txv)
+
+  local rxv   = getS(SN_VOLT)
+  local rxPct = pctFromRxCellVoltage(rxv, o and o.Cells)
+
+  drawSideBar(0,           y, railW, h, rxPct, "RX batt")
+  drawSideBar(800 - FRM_R, y, railW, h, txPct, "TX batt")
+end
+
+
 local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   drawTile(tx, ty, tw, th)
   lbl(tx+6, ty+TY_LBL, lbl_str)
   if mode == 1 then
-    drawBar(tx, ty, tw, th, d.pct, d.col)
-    sub(tx+6, ty+TY_LBL+14, d.val, d.col)
+    local pad = 8
+    local valY = ty + TY_LBL + 14
+    local unitY = ty + math.floor(th * 0.72)
+    local barH = 10
+      local barTop = ty + math.floor(th * 0.53)
+    local maxBarTop = unitY - 8 - barH
+    if barTop > maxBarTop then barTop = maxBarTop end
+    if barTop < valY + 10 then barTop = valY + 10 end
+    drawBar(tx + pad, barTop, tw - 2 * pad, barH, d.pct, d.col)
+    sub(tx+6, valY, d.val, d.col)
+    if d.unit and d.unit ~= "" then
+      sub(tx+6, unitY, d.unit, C_DIM)
+    end
   elseif mode == 2 then
     drawGauge(tx, ty, tw, th, d.pct, d.col, d.val, d.unit)
   else
@@ -665,6 +754,7 @@ local function refresh(widget, event, touchState)
   drawPit()
   drawGrid(widget.options)
   drawCarbonFrame()
+  drawSideBatteryBars(widget.options)
   drawHeader(widget.options)
 end
 

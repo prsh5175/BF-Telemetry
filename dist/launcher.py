@@ -1,6 +1,7 @@
-"""
-BFTelem Launcher
-Loads emulator.py from disk next to the exe so you can edit it without rebuilding.
+"""BF Telemetry launcher.
+
+Loads and executes emulator.py from disk so packaged builds and source runs both
+pick up local emulator edits without rebuilding the launcher.
 """
 import sys, os
 
@@ -35,4 +36,5 @@ if not os.path.exists(emulator_path):
 with open(emulator_path, 'r', encoding='utf-8') as f:
     code = f.read()
 
+# Execute emulator.py as if it were launched directly.
 exec(compile(code, emulator_path, 'exec'), {'__file__': emulator_path, '__name__': '__main__'})

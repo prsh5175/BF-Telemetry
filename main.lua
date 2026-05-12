@@ -1,5 +1,7 @@
--- BF Telemetry Widget v3 - Carbon Frame + Recessed Tile Layout
--- EdgeTX 2.12, Lua 5.3, TX16S MK III 800x480
+-- BF Telemetry Widget (default Hex Honeycomb theme)
+-- EdgeTX 2.12+, Lua 5.3, TX16S MK III 800x480.
+-- Current UI details: flat hex borders (no bevel split), side battery rails,
+-- and a time-of-day clock in the top-right pit gap.
 
 local OPTIONS = {
   { "Cells",   VALUE,  4,  1,  8 },
@@ -23,6 +25,8 @@ local OPTIONS = {
   { "T10",     VALUE,  9,  0, 11 },
   { "T11",     VALUE, 10,  0, 11 },
   { "T12",     VALUE, 11,  0, 11 },
+  { "TmrRed",  VALUE, 180, 30, 900 },
+  { "DistRed", VALUE, 100, 20, 2000 },
 }
 
 local SN_LQ    = "RQly"
@@ -124,7 +128,6 @@ local function getS(name)
   if c then return getValue(c) end
   return nil
 end
-
 -- =========================================================================
 --  FLIGHT MODE CLEANUP
 -- =========================================================================
@@ -238,6 +241,11 @@ local function tickArmTimer(opts)
   _fmStr     = cleanFM(s)
 end
 
+local function armTimerSec()
+  if _armStart == nil then return 0 end
+  return math.floor((getTime() - _armStart) / 100)
+end
+
 local function armTimerStr()
   if _armStart == nil then return "--:--" end
   local sec = math.floor((getTime() - _armStart) / 100)
@@ -273,6 +281,12 @@ local function cPct(p)
   if p >= 40 then return C_GREEN end
   if p >= 20 then return C_YELLOW end
   return C_RED
+end
+local function cPctInv(p)
+  if p == nil then return C_DIM end
+  if p >= 70 then return C_RED end
+  if p >= 40 then return C_YELLOW end
+  return C_GREEN
 end
 local function cVolt(cV, wV, kV)
   if cV == nil then return C_DIM end
@@ -312,7 +326,7 @@ local GY = TOP_MID + 2
 local GW = 800 - FRM_L - FRM_R
 local GH = 480 - TOP_MID - FRM_B
 
--- Honeycomb layout (12 cells = 4 columns x 3 staggered rows)
+-- Honeycomb layout (12 cells = 6 columns x 2 staggered rows)
 local HX_COLS = 6
 local HX_ROWS = 2
 local HX_GAP  = 2
@@ -455,13 +469,14 @@ local function drawTile(tx, ty, tw, th)
     lcd.drawFilledRectangle(tx + q, fillY, fillW, fillH, C_TILE)
   end
 
-  -- Hex outline (6 edges) so the honeycomb remains clearly visible.
-  lcd.drawLine(xLT, y1,  xRT, y1,  0xFF, C_SIL_HI)   -- top
-  lcd.drawLine(xRT, y1,  xR,  yM,  0xFF, C_SIL_MID)  -- right-top
-  lcd.drawLine(xR,  yM,  xRT, y4,  0xFF, C_SIL_DK)   -- right-bottom
-  lcd.drawLine(xRT, y4,  xLT, y4,  0xFF, C_SIL_DK)   -- bottom
-  lcd.drawLine(xLT, y4,  xL,  yM,  0xFF, C_SIL_MID)  -- left-bottom
-  lcd.drawLine(xL,  yM,  xLT, y1,  0xFF, C_SIL_HI)   -- left-top
+  -- Hex outline (6 edges): flat style (no top/bottom shading split).
+  local edgeCol = C_SIL_HI
+  lcd.drawLine(xLT, y1,  xRT, y1,  0xFF, edgeCol)  -- top
+  lcd.drawLine(xRT, y1,  xR,  yM,  0xFF, edgeCol)  -- right-top
+  lcd.drawLine(xR,  yM,  xRT, y4,  0xFF, edgeCol)  -- right-bottom
+  lcd.drawLine(xRT, y4,  xLT, y4,  0xFF, edgeCol)  -- bottom
+  lcd.drawLine(xLT, y4,  xL,  yM,  0xFF, edgeCol)  -- left-bottom
+  lcd.drawLine(xL,  yM,  xLT, y1,  0xFF, edgeCol)  -- left-top
 end
 
 -- =========================================================================
@@ -493,10 +508,11 @@ end
 --  BAR MODE
 -- =========================================================================
 local function drawBar(tx, ty, tw, th, pct, col)
-  local bx = tx + 6
-  local by = ty + 30
-  local bw = tw - 12
-  local bh = th - 38
+  local bx = tx
+  local by = ty
+  local bw = tw
+  local bh = th
+  if bw < 8 or bh < 10 then return end
   lcd.drawFilledRectangle(bx, by, bw, bh, C_SIL_DK)
   local fw = math.floor(bw * math.max(0, math.min(1, (pct or 0)/100)))
   if fw > 0 then
@@ -504,10 +520,6 @@ local function drawBar(tx, ty, tw, th, pct, col)
     lcd.drawFilledRectangle(bx+fw-2, by, 2, bh, C_SIL_HI)
   end
   lcd.drawRectangle(bx, by, bw, bh, C_SIL_MID)
-  if pct then
-    lcd.drawText(tx + tw/2, by + bh/2 - 8,
-      string.format("%d%%", math.floor(pct)), MIDSIZE+BOLD+CENTER+(col or C_WHITE))
-  end
 end
 
 -- =========================================================================
@@ -523,6 +535,7 @@ local _gaugeBgBuildBudget = 2  -- max uncached gauge backgrounds to build per re
 local _dialBmp = nil
 local _dialBmpTried = false
 local _dialBmpDrawSig = 0  -- 0 unknown, 1 drawBitmap(bmp,x,y), 2 drawBitmap(x,y,bmp), -1 unsupported
+local _gaugeLiteScaleCache = {}
 
 local DIAL_BMP_W = 88
 local DIAL_BMP_H = 46
@@ -579,6 +592,71 @@ local function drawDialBitmap(bmp, x, y)
 
   _dialBmpDrawSig = -1
   return false
+end
+
+local function gaugeLiteScaleColor(t)
+  local r, g, b
+  if t <= 0.5 then
+    -- Green -> Yellow
+    local k = t * 2
+    r = math.floor(255 * k + 0.5)
+    g = 255
+    b = 20
+  else
+    -- Yellow -> Red
+    local k = (t - 0.5) * 2
+    r = 255
+    g = math.floor(255 * (1 - k) + 40 * k + 0.5)
+    b = math.floor(20 * (1 - k) + 60 * k + 0.5)
+  end
+  return lcd.RGB(r, g, b)
+end
+
+-- Cached dim full-semicircle track (background), keyed by radius.
+-- Keep this deliberately coarse: line count matters more than geometry precision.
+local function getGaugeLiteTrack(r)
+  local key = tostring(r)
+  local c = _gaugeLiteScaleCache[key]
+  if c then return c end
+
+  local steps = math.max(6, math.floor(r * 0.28))
+  local lines = {}
+  local da = _PI / steps
+  local px, py
+  for i = 0, steps do
+    local a  = _PI - da * i
+    local nx = math.floor(r * math.cos(a) + 0.5)
+    local ny = math.floor(-r * math.sin(a) + 0.5)
+    if px then lines[#lines + 1] = {x1=px, y1=py, x2=nx, y2=ny} end
+    px = nx; py = ny
+  end
+
+  _gaugeLiteScaleCache[key] = lines
+  return lines
+end
+
+-- Cached colored value arc, keyed by radius + pct snapped to 2% buckets.
+local _gaugeLiteArcCache = {}
+local function getGaugeLiteArc(r, pct_bucket)
+  local key = r * 100 + pct_bucket
+  local c = _gaugeLiteArcCache[key]
+  if c then return c end
+
+  local steps = math.max(1, math.floor(math.max(6, r * 0.28) * pct_bucket / 100))
+  local aNeedle = _PI - (_PI * pct_bucket / 100)
+  local lines = {}
+  local da = (aNeedle - _PI) / math.max(1, steps)
+  local px, py
+  for i = 0, steps do
+    local a  = _PI + da * i
+    local nx = math.floor(r * math.cos(a) + 0.5)
+    local ny = math.floor(-r * math.sin(a) + 0.5)
+    if px then lines[#lines + 1] = {x1=px, y1=py, x2=nx, y2=ny} end
+    px = nx; py = ny
+  end
+
+  _gaugeLiteArcCache[key] = lines
+  return lines
 end
 
 local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
@@ -736,66 +814,91 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   end
 end
 
-local function drawGaugeLite(tx, ty, tw, th, pct, col, val_str, unit_str)
+local function drawGaugeLite(tx, ty, tw, th, pct, col, label_str, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
-  local cy = math.floor(ty + th * 0.62)
-  local r = math.floor(math.min(tw * 0.30, th * 0.30))
-  if r < 10 then r = 10 end
 
-  local xL = cx - r + 5
-  local xR = cx + r - 5
-  local yB = cy + 2
-  local yT = cy - r + 6
-  local xM1 = cx - math.floor(r * 0.45)
-  local xM2 = cx + math.floor(r * 0.45)
+  -- Keep the dial high enough that label/value/unit can stack beneath it.
+  local arcH = math.floor(th * 0.44)
+  local arcR = math.floor(math.min((tw - 18) / 2, arcH - 2))
+  if arcR < 8 then arcR = 8 end
+
+  local arcCx = cx
+  local arcCy = ty + arcH
+  local yPivot = arcCy
+  local visualBottom = ty + arcH
 
   local dialBmp = getDialBitmap()
-  local yPivot = cy
   if dialBmp then
-    -- Place static dial art with fixed footprint (no runtime scaling).
     local bw = DIAL_BMP_W
     local bh = DIAL_BMP_H
     local bx = cx - math.floor(bw / 2) + DIAL_BMP_OFF_X
-    local by = cy - math.floor(bh * 0.88) + DIAL_BMP_OFF_Y
+    local by = ty + DIAL_BMP_OFF_Y
     drawDialBitmap(dialBmp, bx, by)
-
-    -- Needle track aligned to dial bitmap geometry.
-    xL = bx + 10
-    xR = bx + bw - 10
-    yB = by + bh - 3
-    yT = by + 7
-    yPivot = yB
+    arcCx = bx + math.floor(bw / 2)
+    arcCy = by + bh - 3
+    yPivot = arcCy
+    visualBottom = by + bh - 1
+    local maxR = math.floor((bw - 14) / 2)
+    if arcR > maxR then arcR = maxR end
   else
-    -- Fallback: low-cost stylized gauge arc.
-    lcd.drawLine(xL, yB, xM1, yT, 0xFF, C_SIL_MID)
-    lcd.drawLine(xM1, yT, xM2, yT, 0xFF, C_SIL_HI)
-    lcd.drawLine(xM2, yT, xR, yB, 0xFF, C_SIL_MID)
+    local maxR = math.floor((tw - 10) / 2)
+    if arcR > maxR then arcR = maxR end
+    visualBottom = arcCy
   end
 
   local p = math.max(0, math.min(100, pct or 0))
-  local idx = math.floor(p / 10 + 0.5)
-  if idx < 0 then idx = 0 end
-  if idx > 10 then idx = 10 end
-  local t = idx / 10
-  local nx = math.floor(xL + (xR - xL) * t + 0.5)
-  local ny
-  if t <= 0.5 then
-    local k = t * 2
-    ny = math.floor(yB + (yT - yB) * k + 0.5)
-  else
-    local k = (t - 0.5) * 2
-    ny = math.floor(yT + (yB - yT) * k + 0.5)
+
+  -- Background: one-stroke dim full-semicircle track.
+  local track = getGaugeLiteTrack(arcR)
+  for i = 1, #track do
+    local ln = track[i]
+    lcd.drawLine(arcCx + ln.x1, arcCy + ln.y1, arcCx + ln.x2, arcCy + ln.y2, 0xFF, C_SIL_DK)
   end
 
-  -- Needle and hub.
-  lcd.drawLine(cx, yPivot, nx, ny, 0xFF, col or C_GREEN)
-  lcd.drawFilledRectangle(cx - 1, yPivot - 1, 3, 3, C_WHITE)
+  -- Value arc: one-stroke colored arc from left to needle.
+  if p > 0 then
+    local bucket = math.floor(p / 5 + 0.5) * 5  -- snap to nearest 5%
+    if bucket > 100 then bucket = 100 end
+    local arc = getGaugeLiteArc(arcR, bucket)
+    for i = 1, #arc do
+      local ln = arc[i]
+      lcd.drawLine(arcCx + ln.x1, arcCy + ln.y1, arcCx + ln.x2, arcCy + ln.y2, 0xFF, col or C_WHITE)
+    end
+  end
+
+  -- Needle (1 line + 1 rect — always fresh, very cheap).
+  local aNeedle = _PI - (_PI * p / 100)
+  local nx = math.floor(arcCx + arcR * math.cos(aNeedle) + 0.5)
+  local ny = math.floor(arcCy - arcR * math.sin(aNeedle) + 0.5)
+  lcd.drawLine(arcCx, yPivot, nx, ny, 0xFF, col or C_WHITE)
+  lcd.drawFilledRectangle(arcCx - 1, yPivot - 1, 3, 3, C_WHITE)
+
+  -- Text stack: label starts just below dial bottom, value below label,
+  -- and unit stays near tile bottom.
+  local minLabelY = visualBottom + 4
+  local unitY = ty + th - 20
+  local labelY = minLabelY
+  local valY = labelY + 12
+
+  -- Keep value and label clear of the fixed unit line.
+  local maxValY = unitY - 14
+  if valY > maxValY then
+    valY = maxValY
+    labelY = valY - 12
+    if labelY < minLabelY then
+      labelY = minLabelY
+    end
+  end
+
+  if label_str and label_str ~= "" then
+    lcd.drawText(cx, labelY, label_str, SMLSIZE + CENTER + C_CYAN)
+  end
 
   if val_str then
-    lcd.drawText(cx, cy - 12, val_str, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
+    lcd.drawText(cx, valY, val_str, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
   end
   if unit_str then
-    lcd.drawText(cx, cy + 2, unit_str, SMLSIZE + CENTER + C_DIM)
+    lcd.drawText(cx, unitY, unit_str, SMLSIZE + CENTER + C_DIM)
   end
 end
 
@@ -871,12 +974,28 @@ local function tdBatt(o)
 end
 local function tdCurrent(o)
   local v=getS(SN_CURR)
+  local pct=v and math.min(100,v) or nil
   return { val=v and string.format("%.1f",v) or "---", unit="Amps",
-           pct=v and math.min(100,v) or nil, col=C_WHITE }
+           pct=pct, col=cPctInv(pct) }
 end
 local function tdTimer(o)
+  local sec = armTimerSec()
+  local redS = math.max(30, math.floor(tonumber(o and o.TmrRed) or 180))
+  local yellowS = math.max(10, math.floor(redS * 0.70 + 0.5))
+  local col = C_GREEN
+  if _lastArmed then
+    if sec >= redS then
+      col = C_RED
+    elseif sec >= yellowS then
+      col = C_YELLOW
+    else
+      local t = sec / math.max(1, yellowS)
+      col = lcd.RGB(math.floor(255 * t + 0.5), 255, math.floor(100 * (1 - t) + 0.5))
+    end
+  end
+  local pct = _lastArmed and math.min(100, (sec / math.max(1, redS)) * 100) or 0
   return { val=armTimerStr(), unit=_lastArmed and "ARMED" or "disarmed",
-           pct=nil, col=_lastArmed and C_GREEN or C_DIM }
+           pct=pct, col=col }
 end
 local function tdRSSI(o)
   local v1=getS(SN_RSSI1); local v2=getS(SN_RSSI2)
@@ -896,14 +1015,14 @@ local function tdCellV(o)
 end
 local function tdMah(o)
   local v=getS(SN_CAPA)
-  local col=v and (v<500 and C_GREEN or (v<800 and C_YELLOW or C_RED)) or C_DIM
+  local pct=v and math.min(100,v/10) or nil
   return { val=v and string.format("%d",v) or "---", unit="mAh",
-           pct=v and math.min(100,v/10) or nil, col=col }
+           pct=pct, col=cPctInv(pct) }
 end
 local function tdThrottle(o)
   local v = throttlePct()
   return { val=v and string.format("%d",v) or "---", unit="%",
-           pct=v, col=C_ORANGE }
+           pct=v, col=cPctInv(v) }
 end
 local function tdTXPwr(o)
   local v=getS(SN_TPWR)
@@ -913,14 +1032,27 @@ local function tdTXPwr(o)
 end
 local function tdAlt(o)
   local v=getS(SN_ALT)
+  local pct=v and math.max(0,math.min(100,v/5)) or nil
   return { val=v and string.format("%.1f",v) or "---", unit="metres",
-           pct=v and math.max(0,math.min(100,v/5)) or nil, col=C_WHITE }
+           pct=pct, col=cPctInv(pct) }
 end
 local function tdDist(o)
   local v=getS(SN_DIST)
-  local col=v and (v>=500 and C_RED or (v>=200 and C_ORANGE or C_GREEN)) or C_DIM
+  local redD = math.max(20, math.floor(tonumber(o and o.DistRed) or 100))
+  local yellowD = math.max(5, math.floor(redD * 0.70 + 0.5))
+  local col = C_DIM
+  if type(v) == "number" then
+    if v >= redD then
+      col = C_RED
+    elseif v >= yellowD then
+      col = C_YELLOW
+    else
+      col = C_GREEN
+    end
+  end
+  local pct=v and math.min(100, (v / math.max(1, redD)) * 100) or nil
   return { val=v and string.format("%.0f",v) or "---", unit="metres",
-           pct=v and math.min(100,v/10) or nil, col=col }
+           pct=pct, col=col }
 end
 local function tdRFMode(o)
   local v=getS(SN_RFMD)
@@ -1239,19 +1371,31 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   if lbl_str == "DISTANCE"     then shortLbl = "DIST" end
   if lbl_str == "ALTITUDE"     then shortLbl = "ALT" end
 
-  -- label: small, cyan, centered
-  lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
-
   if mode == 1 then
-    local mCol = (d.pct ~= nil) and cPct(d.pct) or (d.col or C_WHITE)
+    -- label: small, cyan, centered
+    lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
+    local mCol = d.col or ((d.pct ~= nil) and cPct(d.pct) or C_WHITE)
     local pad = math.max(8, math.floor(tw * 0.14))
-    drawBar(tx + pad, ty + math.floor(th * 0.33), tw - 2 * pad, math.floor(th * 0.54), d.pct, mCol)
-    lcd.drawText(cx, yLbl + 14, d.val, SMLSIZE + CENTER + BOLD + mCol)
+    local valY = yLbl + 14
+    local unitY = ty + math.floor(th * 0.72)
+    local barH = math.max(8, math.min(12, math.floor(th * 0.09)))
+    local barTop = ty + math.floor(th * 0.50) + 6
+    local maxBarTop = unitY - 8 - barH
+    if barTop > maxBarTop then barTop = maxBarTop end
+    if barTop < valY + 10 then barTop = valY + 10 end
+
+    drawBar(tx + pad, barTop, tw - 2 * pad, barH, d.pct, mCol)
+    lcd.drawText(cx, valY, d.val, SMLSIZE + CENTER + BOLD + mCol)
+    if d.unit and d.unit ~= "" then
+      lcd.drawText(cx, unitY, d.unit, SMLSIZE + CENTER + C_DIM)
+    end
   elseif mode == 2 then
-    local mCol = (d.pct ~= nil) and cPct(d.pct) or (d.col or C_WHITE)
+    local mCol = d.col or ((d.pct ~= nil) and cPct(d.pct) or C_WHITE)
     local pad = math.max(8, math.floor(tw * 0.14))
-    drawGaugeLite(tx + pad, ty + 6, tw - 2 * pad, th - 14, d.pct, mCol, d.val, d.unit)
+    drawGaugeLite(tx + pad, ty + 6, tw - 2 * pad, th - 14, d.pct, mCol, shortLbl, d.val, d.unit)
   else
+    -- label: small, cyan, centered
+    lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
     lcd.drawText(cx, yVal, d.val, MIDSIZE + BOLD + CENTER + (d.col or C_WHITE))
     if d.unit and d.unit ~= "" then
       lcd.drawText(cx, yUnit, d.unit, SMLSIZE + CENTER + C_DIM)
@@ -1263,7 +1407,7 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
 end
 
 -- =========================================================================
---  HEADER  (drawn inside the carbon top bar center bulge)
+--  HEADER  (top bar model/mode/arm status + TX voltage + screen mode + clock)
 -- =========================================================================
 local function drawHeader(o)
   local mname = "CRAFT"
@@ -1305,6 +1449,22 @@ local function drawHeader(o)
   local st = getScreenType(o)
   local mLbl = (st==1) and "SCR: BAR" or (st==2) and "SCR: GAUGE" or "SCR: NUM"
   lcd.drawText(785, 56, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
+
+  -- Clock in the top-right pit gap (outside the top-right hex tile).
+  if getDateTime then
+    local dt = getDateTime()
+    if type(dt) == "table" then
+      local hh = dt.hour or dt.hr or dt[4]
+      local mm = dt.min or dt.minute or dt[5]
+      if type(hh) == "number" and type(mm) == "number" then
+        local t = string.format("%02d:%02d", hh, mm)
+        local cx = GX + GW - 10
+        local cy = GY + 10
+        lcd.drawText(cx, cy, "TIME", SMLSIZE + RIGHT + C_SIL_MID)
+        lcd.drawText(cx, cy + 12, t, MIDSIZE + BOLD + RIGHT + C_SIL_HI)
+      end
+    end
+  end
 end
 
 -- =========================================================================
@@ -1383,8 +1543,8 @@ local function drawSideBatteryBars(o)
   local rxv = getS(SN_VOLT)
   local rxPct = pctFromRxCellVoltage(rxv, o and o.Cells)
 
-  drawSideBar(railPadX, y, railW, h, txPct, "TX batt")
-  drawSideBar(800 - FRM_R + railPadX, y, railW, h, rxPct, "RX batt")
+  drawSideBar(railPadX, y, railW, h, rxPct, "RX batt")
+  drawSideBar(800 - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
 end
 
 -- =========================================================================
@@ -1454,6 +1614,8 @@ local function refresh(widget, event, touchState)
   end
   handleTouch(widget, touchState)
   tickArmTimer(widget.options)
+
+  -- Draw order: pit/grid first, then menu overlay, frame/rails, then header text.
   lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
   drawPit()
   drawGrid(widget.options)

@@ -2,12 +2,14 @@
 """
 BF Telemetry Widget Emulator
 Reads layout constants and colors directly from main.lua.
+Matches the live widget visuals, including flat hex borders and header clock.
 Keys: N=NUM  B=BAR  G=GAUGE  A=arm/disarm  R=reload lua  Q=quit
 Mouse: click a tile to open metric picker, click metric row to assign tile
 Place BFTelemEmulator.exe next to main.lua, OR anywhere - it will show
 a file-picker dialog on first launch and remember the path.
 """
 import re, os, sys, math, json, pygame
+from datetime import datetime
 
 try:
     from lupa import LuaRuntime, lua_type
@@ -406,13 +408,14 @@ def draw_hex_tile(surf, X, Y, TW, TH):
     poly = [(xLT, y1), (xRT, y1), (xR, yM), (xRT, y4), (xLT, y4), (xL, yM)]
     pygame.draw.polygon(surf, L['C_TILE'], poly)
 
-    # outer bevel (essential edges)
-    pygame.draw.line(surf, L['C_SIL_HI'], (xLT, y1),  (xRT, y1),  1)  # top flat
-    pygame.draw.line(surf, L['C_SIL_HI'], (xRT, y1),  (xR,  yM),  1)  # top-right
-    pygame.draw.line(surf, L['C_SIL_HI'], (xL,  yM),  (xLT, y1),  1)  # top-left
-    pygame.draw.line(surf, L['C_SIL_DK'], (xR,  yM),  (xRT, y4),  1)  # bottom-right
-    pygame.draw.line(surf, L['C_SIL_DK'], (xRT, y4),  (xLT, y4),  1)  # bottom flat
-    pygame.draw.line(surf, L['C_SIL_DK'], (xLT, y4),  (xL,  yM),  1)  # bottom-left
+    # Flat hex outline (no top/bottom shading split).
+    edge = L['C_SIL_HI']
+    pygame.draw.line(surf, edge, (xLT, y1),  (xRT, y1),  1)  # top flat
+    pygame.draw.line(surf, edge, (xRT, y1),  (xR,  yM),  1)  # top-right
+    pygame.draw.line(surf, edge, (xL,  yM),  (xLT, y1),  1)  # top-left
+    pygame.draw.line(surf, edge, (xR,  yM),  (xRT, y4),  1)  # bottom-right
+    pygame.draw.line(surf, edge, (xRT, y4),  (xLT, y4),  1)  # bottom flat
+    pygame.draw.line(surf, edge, (xLT, y4),  (xL,  yM),  1)  # bottom-left
 
 def draw_tile(surf, X, Y, TW, TH):
     if L.get('USE_HEX'):
@@ -450,7 +453,6 @@ def hit_flat_hex(px, py, X, Y, TW, TH):
     x_l = X + inset
     x_r = X + TW - 1 - inset
     return x_l <= px <= x_r
-
 def tile_positions(tile_count):
     out = []
     if L.get('USE_HEX'):
@@ -542,9 +544,84 @@ def draw_metric_menu(surf, labels, selected_idx, tile_idx, scroll):
     pygame.draw.rect(surf, L['C_SIL_HI'], (x + MENU_PAD, reset_y, w - MENU_PAD * 2, MENU_ROW_H - 2), 1)
     tx(surf, "RESET LAYOUT", x + MENU_PAD + 8, reset_y + 11, L['C_WHITE'], F_SML)
 
+# ── Side battery bars ─────────────────────────────────────────────────────────
+def c_batt(p):
+    """Green→yellow→red based on percentage (high = good)."""
+    if p is None: return L['C_DIM']
+    return L['C_GREEN'] if p >= 60 else L['C_YELLOW'] if p >= 30 else L['C_RED']
+
+def draw_sidebar(surf, x, y, w, h, pct, label):
+    cx = x + w // 2
+    label_top = y + 2
+    bar_top   = y + 40
+    pct_y     = y + h - 10
+    bar_bot   = pct_y - 4
+
+    # Two-line label
+    parts = label.split()
+    if len(parts) == 2:
+        tx(surf, parts[0], cx, label_top,      L['C_SIL_HI'], F_LBL, align="center")
+        tx(surf, parts[1], cx, label_top + 12, L['C_SIL_HI'], F_LBL, align="center")
+    else:
+        tx(surf, label, cx, label_top + 6, L['C_SIL_HI'], F_LBL, align="center")
+        bar_top = y + 36
+
+    bar_h = bar_bot - bar_top
+    if bar_h < 30:
+        return
+
+    seg_count = 10
+    gap       = 2
+    seg_h     = max(3, (bar_h - gap * (seg_count - 1)) // seg_count)
+    lit       = int(round((pct or 0) / 100 * seg_count))
+    lit       = max(0, min(seg_count, lit))
+
+    pygame.draw.rect(surf, L['C_SIL_LO'], (x - 2, bar_top - 2, w + 4, bar_h + 4), 1)
+
+    for i in range(seg_count):
+        idx_from_bot = seg_count - i  # 10 at top, 1 at bottom
+        sy  = bar_top + i * (seg_h + gap)
+        col = c_batt((idx_from_bot / seg_count) * 100) if idx_from_bot <= lit else L['C_SIL_DK']
+        fr(surf, x, sy, w, seg_h, col)
+        pygame.draw.rect(surf, L['C_CF1'], (x, sy, w, seg_h), 1)
+
+    pct_s = f"{int(round(pct))}%" if pct is not None else "---"
+    tx(surf, pct_s, cx, pct_y, c_batt(pct), F_LBL, align="center")
+
+def draw_side_battery_bars(surf, tx_voltage, rx_volt, rx_cells=4):
+    FRM_L = L['FRM_L']
+    FRM_R = L['FRM_R']
+    TM    = L['TOP_MID']
+    FRM_B = L['FRM_B']
+
+    rail_w = FRM_L
+    if rail_w < 12:
+        return
+
+    bar_y = TM + 16
+    bar_h = H - TM - FRM_B - 34
+    if bar_h < 80:
+        return
+
+    # TX: radio internal 2S lipo, approx 6.4V empty → 8.4V full
+    tx_pct = None
+    if tx_voltage:
+        tx_pct = max(0.0, min(100.0, (tx_voltage - 6.4) / (8.4 - 6.4) * 100))
+
+    # RX: per-cell voltage, 3.3V empty → 4.2V full
+    rx_pct = None
+    if rx_volt and rx_cells:
+        cell_v = rx_volt / rx_cells
+        rx_pct = max(0.0, min(100.0, (cell_v - 3.3) / (4.2 - 3.3) * 100))
+
+    draw_sidebar(surf, 0,           bar_y, rail_w, bar_h, rx_pct, "RX batt")
+    draw_sidebar(surf, W - FRM_R,   bar_y, rail_w, bar_h, tx_pct, "TX batt")
+
 # ── Bar ───────────────────────────────────────────────────────────────────────
 def draw_bar(surf, X, Y, TW, TH, pct, c):
-    bx = X+6; by = Y+30; bw = TW-12; bh = TH-38
+    bx = X; by = Y; bw = TW; bh = TH
+    if bw < 8 or bh < 10:
+        return
     fr(surf, bx, by, bw, bh, L['C_SIL_DK'])
     if pct is not None:
         fw = int(bw * max(0, min(1, pct/100)))
@@ -552,9 +629,6 @@ def draw_bar(surf, X, Y, TW, TH, pct, c):
             fr(surf, bx, by, fw, bh, c)
             fr(surf, bx+fw-2, by, 2, bh, L['C_SIL_HI'])
     pygame.draw.rect(surf, L['C_SIL_MID'], (bx, by, bw, bh), 1)
-    if pct is not None:
-        s = F_MID.render(f"{int(pct)}%", True, c)
-        surf.blit(s, (bx+bw//2-s.get_width()//2, by+bh//2-s.get_height()//2))
 
 # ── Arc gauge ─────────────────────────────────────────────────────────────────
 def arc_seg(surf, cx, cy, r, a1, a2, c, steps=12):
@@ -620,47 +694,75 @@ def draw_motorbike_needle(surf, cx, cy, r, a, c):
     fr(surf, cx - 2, cy - 2, 5, 5, L['C_SIL_HI'])
     fr(surf, cx - 1, cy - 1, 3, 3, L['C_WHITE'])
 
-def draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s):
+def draw_gauge(surf, X, Y, TW, TH, pct, c, label_s, val_s, unit_s):
     cx = X + TW // 2
-    thick = max(8, min(96, int(min(TW, TH) * 0.18)))
-    half_t = thick // 2
-    r = int(min(TW * 0.28, TH * 0.28))
-    max_r_h = int((TH - 14 - (half_t * 2)) / 2)
-    if max_r_h < 8:
-        max_r_h = 8
-    if r > max_r_h:
-        r = max_r_h
 
-    cy_min = Y + 8 + r + half_t
-    cy_max = Y + TH - 6 - r - half_t
-    cy = int(Y + TH * 0.62)
-    if cy < cy_min:
-        cy = cy_min
-    if cy > cy_max:
-        cy = cy_max
+    # Dial kept high; text stack lives beneath it.
+    arc_h = int(TH * 0.44)
+    arc_r = min((TW - 18) // 2, arc_h - 2)
+    if arc_r < 8:
+        arc_r = 8
 
-    aS = math.radians(210)
-    aE = math.radians(210 - 300)
+    arc_cx = cx
+    arc_cy = Y + arc_h
+    visual_bottom = arc_cy
 
-    arc_band(surf, cx, cy, r, aS, aE, L['C_SIL_LO'], L['C_SIL_DK'], L['C_CF1'], thick)
-    a_red = aS - (aS - aE) * 0.84
-    arc_band(surf, cx, cy, r + int(thick * 0.30), a_red, aE,
-             L['C_RED'], L['C_ORANGE'], L['C_SIL_DK'], max(3, int(thick * 0.14)))
-    draw_gauge_ticks(surf, cx, cy, r, aS, aE)
+    p = max(0.0, min(100.0, pct or 0.0))
+    a_start  = math.pi          # left (0%)
+    a_full   = 0.0              # right (100%)
+    a_needle = math.pi - (math.pi * p / 100.0)
 
-    if pct and pct > 0:
-        aV = aS - (aS-aE)*min(pct,100)/100
-        arc_band(surf, cx, cy, r, aS, aV, c, L['C_SIL_MID'], L['C_SIL_DK'], thick)
-        draw_motorbike_needle(surf, cx, cy, r, aV, c)
-    else:
-        fr(surf, cx - 2, cy - 2, 5, 5, L['C_SIL_HI'])
-        fr(surf, cx - 1, cy - 1, 3, 3, L['C_WHITE'])
+    steps = max(20, int(arc_r * 1.2))
+
+    def _arc_pts(rr, a1, a2, n):
+        da = (a2 - a1) / n
+        return [(arc_cx + int(rr * math.cos(a1 + i*da) + 0.5),
+                 arc_cy - int(rr * math.sin(a1 + i*da) + 0.5))
+                for i in range(n + 1)]
+
+    # Dim full-semicircle track (background).
+    for ring in range(2):
+        pts = _arc_pts(arc_r - ring, a_start, a_full, steps)
+        for i in range(len(pts) - 1):
+            pygame.draw.line(surf, L['C_SIL_DK'], pts[i], pts[i+1])
+
+    # Colored value arc (grows from left as pct increases).
+    if p > 0:
+        val_steps = max(2, int(steps * p / 100))
+        for ring in range(2):
+            pts = _arc_pts(arc_r - ring, a_start, a_needle, val_steps)
+            for i in range(len(pts) - 1):
+                pygame.draw.line(surf, c, pts[i], pts[i+1])
+
+    # Needle and hub.
+    nx = arc_cx + int(arc_r * math.cos(a_needle) + 0.5)
+    ny = arc_cy - int(arc_r * math.sin(a_needle) + 0.5)
+    pygame.draw.line(surf, c, (arc_cx, arc_cy), (nx, ny))
+    fr(surf, arc_cx - 1, arc_cy - 1, 3, 3, L['C_WHITE'])
+
+    # Text stack: label starts just below dial bottom, value below label,
+    # and unit remains near tile bottom.
+    min_label_y = visual_bottom + 4
+    unit_y = Y + TH - 20
+    label_y = min_label_y
+    val_y = label_y + 12
+
+    max_val_y = unit_y - 14
+    if val_y > max_val_y:
+        val_y = max_val_y
+        label_y = val_y - 12
+        if label_y < min_label_y:
+            label_y = min_label_y
+
+    if label_s:
+        s = F_SML.render(label_s, True, L['C_CYAN'])
+        surf.blit(s, (cx - s.get_width() // 2, label_y))
     if val_s:
         s = F_MID.render(val_s, True, c)
-        surf.blit(s, (cx-s.get_width()//2, cy-14))
+        surf.blit(s, (cx - s.get_width() // 2, val_y))
     if unit_s:
         s = F_SML.render(unit_s, True, L['C_DIM'])
-        surf.blit(s, (cx-s.get_width()//2, cy+2))
+        surf.blit(s, (cx - s.get_width() // 2, unit_y))
 
 # ── Tile renderer ─────────────────────────────────────────────────────────────
 def render_tile(surf, X, Y, TW, TH, label, d, mode):
@@ -685,15 +787,27 @@ def render_tile(surf, X, Y, TW, TH, label, d, mode):
         }
         label = short.get(label, label)
 
-        tx(surf, label, cx, y_lbl, L['C_CYAN'], F_SML, align="center")
         if mode == 1:
+            tx(surf, label, cx, y_lbl, L['C_CYAN'], F_SML, align="center")
             pad = max(8, int(TW * 0.14))
-            draw_bar(surf, X + pad, Y + int(TH * 0.33), TW - 2*pad, int(TH * 0.50), pct, c)
-            tx(surf, val_s, cx, y_lbl + 14, c, F_SML, align="center")
+            val_y = y_lbl + 14
+            unit_y = Y + int(TH * 0.72)
+            bar_h = max(8, min(12, int(TH * 0.09)))
+            bar_top = Y + int(TH * 0.50) + 6
+            max_bar_top = unit_y - 8 - bar_h
+            if bar_top > max_bar_top:
+                bar_top = max_bar_top
+            if bar_top < val_y + 10:
+                bar_top = val_y + 10
+            draw_bar(surf, X + pad, bar_top, TW - 2*pad, bar_h, pct, c)
+            tx(surf, val_s, cx, val_y, c, F_SML, align="center")
+            if unit_s:
+                tx(surf, unit_s, cx, unit_y, L['C_DIM'], F_SML, align="center")
         elif mode == 2:
             pad = max(8, int(TW * 0.14))
-            draw_gauge(surf, X + pad, Y + 6, TW - 2*pad, TH - 14, pct, c, val_s, unit_s)
+            draw_gauge(surf, X + pad, Y + 6, TW - 2*pad, TH - 14, pct, c, label, val_s, unit_s)
         else:
+            tx(surf, label, cx, y_lbl, L['C_CYAN'], F_SML, align="center")
             tx(surf, val_s, cx, y_val, c, F_MID, align="center")
             if unit_s:
                 tx(surf, unit_s, cx, y_unit, L['C_DIM'], F_SML, align="center")
@@ -712,7 +826,7 @@ def render_tile(surf, X, Y, TW, TH, label, d, mode):
             if sub_s:
                 tx(surf, sub_s, X+6, Y+L['TY_SUB'], L['C_DIM'], F_SML)
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ── Header (status + mode + time-of-day) ─────────────────────────────────────
 def draw_header(surf, mode, armed, fm_str):
     link_active = isinstance(SIM.get("RQly"), (int, float)) and SIM.get("RQly", 0) > 0
     model_name = "Air65" if link_active else "CRAFT"
@@ -731,6 +845,14 @@ def draw_header(surf, mode, armed, fm_str):
         tx(surf, f"TX {txv:.1f}V", 785, 8, col, F_SML, align="right")
     lbl = ["[ NUM ]", "[ BAR ]", "[GAUGE]"][mode]
     tx(surf, lbl, 785, 56, L['C_SIL_MID'], F_SML, align="right")
+
+    # Clock in the top-right pit gap (outside the top-right hex tile).
+    now = datetime.now()
+    clock_s = f"{now.hour:02d}:{now.minute:02d}"
+    cx = L['GX'] + L['GW'] - 10
+    cy = L['GY'] + 10
+    tx(surf, "TIME", cx, cy, L['C_SIL_MID'], F_SML, align="right")
+    tx(surf, clock_s, cx, cy + 12, L['C_SIL_HI'], F_MID, align="right")
 
 # ── Simulated sensor values  (edit to preview different states) ───────────────
 SIM = {
@@ -1071,6 +1193,12 @@ def run_lua_driven_emulator(lua_path):
                     bridge.reload_script()
                     last_mtime = os.path.getmtime(lua_path)
                     reloaded_msg = pygame.time.get_ticks()
+                elif ev.key == pygame.K_s:
+                    mode_name = ["num", "bar", "gauge"][int(bridge.options.get('Mode', 0) or 0)]
+                    fname = os.path.join(os.path.dirname(lua_path), "assets", "screenshots", f"BF Telem lua screenshot_{mode_name}.png")
+                    os.makedirs(os.path.dirname(fname), exist_ok=True)
+                    pygame.image.save(surf, fname)
+                    reloaded_msg = pygame.time.get_ticks()
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 mouse_down = True
                 mouse_pos = ev.pos
@@ -1096,8 +1224,7 @@ def run_lua_driven_emulator(lua_path):
         bridge.refresh(surf)
 
         hy = H - 14
-        tx(surf, f"lua: {lua_path}", 4, hy, (100, 130, 180), F_LBL)
-        tx(surf, "Lua-driven  |  N=num  B=bar  G=gauge  A=arm  R=reload  Q=quit",
+        tx(surf, "Lua-driven  |  N=num  B=bar  G=gauge  A=arm  R=reload  S=screenshot  Q=quit",
            W-4, hy, (100, 130, 180), F_LBL, align="right")
 
         if reloaded_msg and pygame.time.get_ticks() - reloaded_msg < 1500:
@@ -1185,6 +1312,11 @@ def main():
                     L = make_layout(parse_lua(LUA_PATH))
                     _last_mtime  = os.path.getmtime(LUA_PATH)
                     reloaded_msg = pygame.time.get_ticks()
+                elif ev.key == pygame.K_s:
+                    mode_name = ["num", "bar", "gauge"][mode]
+                    fname = f"screenshot_{mode_name}.png"
+                    pygame.image.save(surf, fname)
+                    reloaded_msg = pygame.time.get_ticks()
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 now_ms = pygame.time.get_ticks()
                 if now_ms - last_click_ms < CLICK_DEBOUNCE_MS:
@@ -1262,12 +1394,12 @@ def main():
                 draw_metric_menu(surf, labels, current_idx, menu_tile_idx, menu_scroll)
 
         draw_frame(surf)
+        draw_side_battery_bars(surf, SIM.get("tx-voltage"), SIM.get("RxBt"), rx_cells=4)
         draw_header(surf, mode, armed, fm_str)
 
         # bottom HUD bar
         hy = H - 14
-        tx(surf, f"lua: {LUA_PATH}", 4, hy, L['C_DIM'], F_LBL)
-        tx(surf, "click tile: assign metric  |  N=num  B=bar  G=gauge  A=arm  Q=quit",
+        tx(surf, "click tile: assign metric  |  N=num  B=bar  G=gauge  A=arm  S=screenshot  Q=quit",
            W-4, hy, L['C_DIM'], F_LBL, align="right")
 
         # brief "RELOADED" flash
