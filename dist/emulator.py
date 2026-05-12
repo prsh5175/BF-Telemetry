@@ -9,12 +9,21 @@ a file-picker dialog on first launch and remember the path.
 """
 import re, os, sys, math, json, pygame
 
+try:
+    from lupa import LuaRuntime, lua_type
+    HAS_LUPA = True
+except Exception:
+    LuaRuntime = None
+    lua_type = None
+    HAS_LUPA = False
+
 W, H = 800, 480
 FPS  = 15
-MENU_W = 320
-MENU_ROW_H = 22
+MENU_W = 380
+MENU_ROW_H = 38
 MENU_TITLE_H = 28
 MENU_PAD = 8
+MENU_MAX_ROWS = 8
 CLICK_DEBOUNCE_MS = 140
 
 # ── Lua file discovery ────────────────────────────────────────────────────────
@@ -477,36 +486,61 @@ def tile_at_point(px, py, rects):
     return None
 
 def menu_bounds(metric_count):
-    h = MENU_TITLE_H + MENU_PAD * 2 + metric_count * MENU_ROW_H
+    visible = min(metric_count, MENU_MAX_ROWS)
+    h = MENU_TITLE_H + MENU_PAD * 2 + visible * MENU_ROW_H + MENU_ROW_H
     x = (W - MENU_W) // 2
     y = (H - h) // 2
     return x, y, MENU_W, h
 
-def menu_metric_at(px, py, metric_count):
+def menu_metric_at(px, py, metric_count, scroll):
     x, y, w, h = menu_bounds(metric_count)
     if px < x or px > (x + w - 1) or py < y or py > (y + h - 1):
         return None
+    visible = min(metric_count, MENU_MAX_ROWS)
+    max_scroll = max(0, metric_count - visible)
+    scroll = max(0, min(max_scroll, int(scroll)))
     row_y = y + MENU_TITLE_H + MENU_PAD
-    for i in range(metric_count):
+    for row in range(visible):
         if row_y <= py < (row_y + MENU_ROW_H):
-            return i
+            return ('metric', scroll + row)
         row_y += MENU_ROW_H
+    reset_y = y + h - MENU_ROW_H
+    if reset_y <= py < (reset_y + MENU_ROW_H):
+        return ('reset', None)
     return None
 
-def draw_metric_menu(surf, labels, selected_idx, tile_idx):
+def draw_metric_menu(surf, labels, selected_idx, tile_idx, scroll):
     x, y, w, h = menu_bounds(len(labels))
+    visible = min(len(labels), MENU_MAX_ROWS)
+    max_scroll = max(0, len(labels) - visible)
+    scroll = max(0, min(max_scroll, int(scroll)))
+
     fr(surf, x, y, w, h, L['C_CF1'])
     pygame.draw.rect(surf, L['C_SIL_HI'], (x, y, w, h), 1)
     fr(surf, x + 1, y + 1, w - 2, MENU_TITLE_H, L['C_SIL_DK'])
     tx(surf, f"Tile {tile_idx + 1}: Select Metric", x + 8, y + 6, L['C_WHITE'], F_SML)
 
     row_y = y + MENU_TITLE_H + MENU_PAD
-    for i, label in enumerate(labels):
+    for row in range(visible):
+        i = scroll + row
+        if i >= len(labels):
+            break
+        label = labels[i]
         bg = L['C_HILIGHT'] if i == selected_idx else L['C_TILE']
         fr(surf, x + MENU_PAD, row_y, w - MENU_PAD * 2, MENU_ROW_H - 2, bg)
         pygame.draw.rect(surf, L['C_SIL_LO'], (x + MENU_PAD, row_y, w - MENU_PAD * 2, MENU_ROW_H - 2), 1)
-        tx(surf, label, x + MENU_PAD + 6, row_y + 4, L['C_WHITE'], F_SML)
+        tx(surf, label, x + MENU_PAD + 8, row_y + 11, L['C_WHITE'], F_SML)
         row_y += MENU_ROW_H
+
+    if scroll > 0:
+        tx(surf, "^", x + w - 16, y + 4, L['C_SIL_HI'], F_SML)
+    if scroll < max_scroll:
+        tx(surf, "v", x + w - 16, y + h - 14, L['C_SIL_HI'], F_SML)
+
+    reset_y = y + h - MENU_ROW_H
+    fr(surf, x + MENU_PAD, reset_y, w - MENU_PAD * 2, MENU_ROW_H - 2, L['C_ORANGE'])
+    pygame.draw.rect(surf, L['C_SIL_HI'], (x + MENU_PAD, reset_y, w - MENU_PAD * 2, MENU_ROW_H - 2), 1)
+    tx(surf, "RESET LAYOUT", x + MENU_PAD + 8, reset_y + 11, L['C_WHITE'], F_SML)
 
 # ── Bar ───────────────────────────────────────────────────────────────────────
 def draw_bar(surf, X, Y, TW, TH, pct, c):
@@ -530,19 +564,97 @@ def arc_seg(surf, cx, cy, r, a1, a2, c, steps=12):
     for i in range(len(pts)-1):
         pygame.draw.line(surf, c, pts[i], pts[i+1])
 
+def arc_band(surf, cx, cy, r, a1, a2, core, mid, edge, thick):
+    half = max(1, int((thick or 10) / 2))
+    steps = max(24, int(r * 1.6))
+    for off in range(-half, half + 1):
+        rr = r + off
+        if rr <= 0:
+            continue
+        d = abs(off)
+        if d >= half:
+            col = edge
+        elif d >= (half - 1):
+            col = mid
+        else:
+            col = core
+        arc_seg(surf, cx, cy, rr, a1, a2, col, steps)
+
+def draw_gauge_ticks(surf, cx, cy, r, aS, aE):
+    major = 10
+    minor_per_seg = 1
+    total_minor = major * (minor_per_seg + 1)
+    span = aS - aE
+    for i in range(total_minor + 1):
+        a = aS - span * (i / total_minor)
+        is_major = (i % (minor_per_seg + 1) == 0)
+        in_r = (r - 16) if is_major else (r - 11)
+        out_r = r - 3
+        x1 = cx + int(in_r * math.cos(a) + 0.5)
+        y1 = cy + int(in_r * math.sin(a) + 0.5)
+        x2 = cx + int(out_r * math.cos(a) + 0.5)
+        y2 = cy + int(out_r * math.sin(a) + 0.5)
+        pygame.draw.line(surf, L['C_SIL_HI'] if is_major else L['C_SIL_MID'], (x1, y1), (x2, y2), 1)
+
+def draw_motorbike_needle(surf, cx, cy, r, a, c):
+    tip_r = r - 2
+    shaft_r = r - 16
+    tail_r = 10
+    tip = (cx + int(tip_r * math.cos(a) + 0.5), cy + int(tip_r * math.sin(a) + 0.5))
+    shaft = (cx + int(shaft_r * math.cos(a) + 0.5), cy + int(shaft_r * math.sin(a) + 0.5))
+    tail_a = a + math.pi
+    tail = (cx + int(tail_r * math.cos(tail_a) + 0.5), cy + int(tail_r * math.sin(tail_a) + 0.5))
+    perp_a = a + math.pi / 2
+    w = 3
+    wx = int(w * math.cos(perp_a) + 0.5)
+    wy = int(w * math.sin(perp_a) + 0.5)
+
+    pygame.draw.line(surf, L['C_SIL_DK'], tail, shaft, 2)
+    pygame.draw.line(surf, L['C_SIL_DK'], (cx, cy), tip, 2)
+    pygame.draw.line(surf, c, (cx + wx, cy + wy), (tip[0] + wx, tip[1] + wy), 1)
+    pygame.draw.line(surf, c, (cx - wx, cy - wy), (tip[0] - wx, tip[1] - wy), 1)
+    pygame.draw.line(surf, c, tip, (shaft[0] + wx, shaft[1] + wy), 1)
+    pygame.draw.line(surf, c, tip, (shaft[0] - wx, shaft[1] - wy), 1)
+
+    fr(surf, cx - 4, cy - 4, 9, 9, L['C_SIL_DK'])
+    fr(surf, cx - 2, cy - 2, 5, 5, L['C_SIL_HI'])
+    fr(surf, cx - 1, cy - 1, 3, 3, L['C_WHITE'])
+
 def draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s):
-    cx = X + TW//2;  cy = Y + TH - 14
-    r  = int(min(TW*0.38, (TH-26)*0.76))
-    aS = math.radians(210);  aE = math.radians(210-300)
-    arc_seg(surf, cx, cy, r,   aS, aE, L['C_SIL_LO'])
-    arc_seg(surf, cx, cy, r-3, aS, aE, L['C_SIL_DK'])
+    cx = X + TW // 2
+    thick = max(8, min(96, int(min(TW, TH) * 0.18)))
+    half_t = thick // 2
+    r = int(min(TW * 0.28, TH * 0.28))
+    max_r_h = int((TH - 14 - (half_t * 2)) / 2)
+    if max_r_h < 8:
+        max_r_h = 8
+    if r > max_r_h:
+        r = max_r_h
+
+    cy_min = Y + 8 + r + half_t
+    cy_max = Y + TH - 6 - r - half_t
+    cy = int(Y + TH * 0.62)
+    if cy < cy_min:
+        cy = cy_min
+    if cy > cy_max:
+        cy = cy_max
+
+    aS = math.radians(210)
+    aE = math.radians(210 - 300)
+
+    arc_band(surf, cx, cy, r, aS, aE, L['C_SIL_LO'], L['C_SIL_DK'], L['C_CF1'], thick)
+    a_red = aS - (aS - aE) * 0.84
+    arc_band(surf, cx, cy, r + int(thick * 0.30), a_red, aE,
+             L['C_RED'], L['C_ORANGE'], L['C_SIL_DK'], max(3, int(thick * 0.14)))
+    draw_gauge_ticks(surf, cx, cy, r, aS, aE)
+
     if pct and pct > 0:
         aV = aS - (aS-aE)*min(pct,100)/100
-        arc_seg(surf, cx, cy, r, aS, aV, c)
-        nx = cx+int((r-1)*math.cos(aV)+.5);  ny = cy+int((r-1)*math.sin(aV)+.5)
-        fr(surf, nx-3, ny-3, 7, 7, L['C_SIL_DK'])
-        fr(surf, nx-2, ny-2, 5, 5, L['C_SIL_HI'])
-        fr(surf, nx-1, ny-1, 3, 3, L['C_WHITE'])
+        arc_band(surf, cx, cy, r, aS, aV, c, L['C_SIL_MID'], L['C_SIL_DK'], thick)
+        draw_motorbike_needle(surf, cx, cy, r, aV, c)
+    else:
+        fr(surf, cx - 2, cy - 2, 5, 5, L['C_SIL_HI'])
+        fr(surf, cx - 1, cy - 1, 3, 3, L['C_WHITE'])
     if val_s:
         s = F_MID.render(val_s, True, c)
         surf.blit(s, (cx-s.get_width()//2, cy-14))
@@ -697,6 +809,307 @@ def make_tiles(armed, fm_str, arm_timer):
             None,  L['C_WHITE'],     None),
     ]
 
+
+class LuaWidgetBridge:
+    COLOR_SHIFT = 16
+    SIZE_SML = 0x0001
+    SIZE_MID = 0x0002
+    SIZE_DBL = 0x0004
+    FLAG_BOLD = 0x0010
+    FLAG_CENTER = 0x0020
+    FLAG_RIGHT = 0x0040
+
+    def __init__(self, lua_path):
+        if not HAS_LUPA:
+            raise RuntimeError("lupa not available")
+        self.lua_path = lua_path
+        self.lua = LuaRuntime(unpack_returned_tuples=True)
+        self.surface = None
+        self.sim = {
+            "RQly": 98,
+            "RxBt": 16.2,
+            "Curr": 18.5,
+            "1RSS": -62,
+            "2RSS": -70,
+            "Capa": 420,
+            "Alt": 22.4,
+            "TPWR": 250,
+            "RFMD": 6,
+            "Dist": 145.0,
+            "thr": int((35 * 20.48) - 1024),
+            "tx-voltage": 7.8,
+            "FM": "!DISARMED",
+        }
+        self.touch_down = False
+        self.touch_pos = (0, 0)
+        self.module = None
+        self.widget = None
+        self.options = None
+        self.last_mode = 0
+        self._install_env()
+        self.reload_script()
+
+    def _rgb_pack(self, r, g, b):
+        return (int(r) << 32) | (int(g) << 24) | (int(b) << self.COLOR_SHIFT)
+
+    def _decode_color(self, packed, fallback=(255, 255, 255)):
+        try:
+            n = int(packed)
+        except Exception:
+            return fallback
+        if (n >> self.COLOR_SHIFT) <= 0:
+            return fallback
+        return ((n >> 32) & 0xFF, (n >> 24) & 0xFF, (n >> self.COLOR_SHIFT) & 0xFF)
+
+    def _font_from_flags(self, flags):
+        f = int(flags or 0)
+        if f & self.SIZE_DBL:
+            return F_DBL
+        if f & self.SIZE_MID:
+            return F_MID
+        return F_SML
+
+    def _text_align(self, flags):
+        f = int(flags or 0)
+        if f & self.FLAG_RIGHT:
+            return "right"
+        if f & self.FLAG_CENTER:
+            return "center"
+        return "left"
+
+    def _as_text(self, v):
+        if v is None:
+            return ""
+        if lua_type and lua_type(v) == 'table':
+            chars = []
+            i = 1
+            while True:
+                b = v[i]
+                if b is None or int(b) == 0:
+                    break
+                chars.append(chr(int(b)))
+                i += 1
+            return "".join(chars)
+        return str(v)
+
+    def _table_from_py(self, obj):
+        if isinstance(obj, dict):
+            t = self.lua.table()
+            for k, v in obj.items():
+                t[k] = self._table_from_py(v)
+            return t
+        if isinstance(obj, (list, tuple)):
+            t = self.lua.table()
+            for i, v in enumerate(obj, start=1):
+                t[i] = self._table_from_py(v)
+            return t
+        return obj
+
+    def _table_to_py(self, obj):
+        if not (lua_type and lua_type(obj) == 'table'):
+            return obj
+        keys = [k for k, _ in obj.items()]
+        if keys and all(isinstance(k, (int, float)) for k in keys):
+            idx = [int(k) for k in keys]
+            if sorted(idx) == list(range(1, len(idx) + 1)):
+                return [self._table_to_py(obj[i]) for i in range(1, len(idx) + 1)]
+        out = {}
+        for k, v in obj.items():
+            out[k] = self._table_to_py(v)
+        return out
+
+    def _storage_read(self, key):
+        path = tile_map_cfg_path()
+        try:
+            with open(path, encoding='utf-8') as f:
+                raw = json.load(f)
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        value = raw.get(key)
+        if value is None:
+            return None
+        return self._table_from_py(value)
+
+    def _storage_write(self, key, value):
+        path = tile_map_cfg_path()
+        data = {}
+        try:
+            with open(path, encoding='utf-8') as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                data = raw
+        except Exception:
+            pass
+        data[key] = self._table_to_py(value)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
+    def _install_env(self):
+        g = self.lua.globals()
+        g.VALUE = 0
+        g.SOURCE = 1
+        g.SMLSIZE = self.SIZE_SML
+        g.MIDSIZE = self.SIZE_MID
+        g.DBLSIZE = self.SIZE_DBL
+        g.BOLD = self.FLAG_BOLD
+        g.CENTER = self.FLAG_CENTER
+        g.RIGHT = self.FLAG_RIGHT
+
+        lcd = self.lua.table()
+        lcd.RGB = lambda r, gg, b: self._rgb_pack(r, gg, b)
+        lcd.drawFilledRectangle = lambda x, y, w, h, c: fr(self.surface, int(x), int(y), int(w), int(h), self._decode_color(c, (255, 255, 255)))
+        lcd.drawRectangle = lambda x, y, w, h, c: pygame.draw.rect(self.surface, self._decode_color(c, (255, 255, 255)), (int(x), int(y), int(w), int(h)), 1)
+        lcd.drawLine = lambda x1, y1, x2, y2, pat, c: pygame.draw.line(self.surface, self._decode_color(c, (255, 255, 255)), (int(x1), int(y1)), (int(x2), int(y2)), 1)
+
+        def _draw_text(x, y, text, flags):
+            tx(self.surface, self._as_text(text), int(x), int(y), self._decode_color(flags, (255, 255, 255)),
+               self._font_from_flags(flags), align=self._text_align(flags))
+
+        lcd.drawText = _draw_text
+        g.lcd = lcd
+
+        g.getTime = lambda: int(pygame.time.get_ticks() / 10)
+
+        def _field_info(name):
+            if name is None:
+                return None
+            return self._table_from_py({'id': str(name)})
+
+        def _get_value(src):
+            if src is None:
+                return None
+            key = str(src)
+            return self.sim.get(key)
+
+        g.getFieldInfo = _field_info
+        g.getValue = _get_value
+
+        model = self.lua.table()
+        model.getInfo = lambda: self._table_from_py({'name': 'Air65'})
+        g.model = model
+
+        storage = self.lua.table()
+        storage.read = self._storage_read
+        storage.write = self._storage_write
+        g.storage = storage
+
+    def reload_script(self):
+        with open(self.lua_path, 'r', encoding='utf-8', errors='ignore') as f:
+            code = f.read()
+        self.module = self.lua.execute(code)
+        opt_table = self.module['options']
+        self.options = self.lua.table()
+        i = 1
+        while True:
+            row = opt_table[i]
+            if row is None:
+                break
+            name = str(row[1])
+            default = row[3]
+            self.options[name] = default
+            i += 1
+        zone = self._table_from_py({'x': 0, 'y': 0, 'w': W, 'h': H})
+        self.widget = self.module['create'](zone, self.options)
+        self.last_mode = int(self.options['Mode'] or 0)
+
+    def refresh(self, surf):
+        self.surface = surf
+        touch = None
+        if self.touch_down:
+            x, y = self.touch_pos
+            touch = self._table_from_py({'x': int(x), 'y': int(y)})
+        self.module['refresh'](self.widget, None, touch)
+        if self.options['Mode'] is not None:
+            self.last_mode = int(self.options['Mode'])
+
+    def set_touch(self, down, pos):
+        self.touch_down = bool(down)
+        self.touch_pos = pos
+
+    def set_mode(self, mode):
+        self.options['Mode'] = int(max(0, min(2, mode)))
+        self.module['update'](self.widget, self.options)
+
+    def toggle_armed(self):
+        armed = not (isinstance(self.sim.get('FM'), str) and self.sim.get('FM', '').startswith('!'))
+        self.sim['FM'] = '!DISARMED' if armed else 'ACRO'
+
+
+def run_lua_driven_emulator(lua_path):
+    surf = pygame.display.set_mode((W, H))
+    pygame.display.set_caption(
+        f"BF Telemetry Emulator (Lua-Driven)  [{os.path.basename(lua_path)}]"
+        "   N=num  B=bar  G=gauge  A=arm  R=reload  Q=quit")
+    clock = pygame.time.Clock()
+
+    bridge = LuaWidgetBridge(lua_path)
+    last_mtime = os.path.getmtime(lua_path)
+    mtime_check = 0
+    reloaded_msg = 0
+    mouse_down = False
+    mouse_pos = (0, 0)
+
+    running = True
+    while running:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                running = False
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_q:
+                    running = False
+                elif ev.key == pygame.K_n:
+                    bridge.set_mode(0)
+                elif ev.key == pygame.K_b:
+                    bridge.set_mode(1)
+                elif ev.key == pygame.K_g:
+                    bridge.set_mode(2)
+                elif ev.key == pygame.K_a:
+                    bridge.toggle_armed()
+                elif ev.key == pygame.K_r:
+                    bridge.reload_script()
+                    last_mtime = os.path.getmtime(lua_path)
+                    reloaded_msg = pygame.time.get_ticks()
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                mouse_down = True
+                mouse_pos = ev.pos
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                mouse_down = False
+                mouse_pos = ev.pos
+            elif ev.type == pygame.MOUSEMOTION:
+                mouse_pos = ev.pos
+
+        now = pygame.time.get_ticks()
+        if now - mtime_check >= 1000:
+            mtime_check = now
+            try:
+                mtime = os.path.getmtime(lua_path)
+                if mtime != last_mtime:
+                    last_mtime = mtime
+                    bridge.reload_script()
+                    reloaded_msg = now
+            except OSError:
+                pass
+
+        bridge.set_touch(mouse_down, mouse_pos)
+        bridge.refresh(surf)
+
+        hy = H - 14
+        tx(surf, f"lua: {lua_path}", 4, hy, (100, 130, 180), F_LBL)
+        tx(surf, "Lua-driven  |  N=num  B=bar  G=gauge  A=arm  R=reload  Q=quit",
+           W-4, hy, (100, 130, 180), F_LBL, align="right")
+
+        if reloaded_msg and pygame.time.get_ticks() - reloaded_msg < 1500:
+            s = F_MID.render("RELOADED", True, (0, 255, 255))
+            surf.blit(s, (W//2 - s.get_width()//2, H//2 - s.get_height()//2))
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    pygame.quit()
+    sys.exit()
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
     global LUA_PATH, L
@@ -718,6 +1131,15 @@ def main():
         pygame.time.wait(5000)
         pygame.quit()
         return
+
+    # Preferred mode: run main.lua directly through a Lua runtime bridge.
+    # Falls back to legacy Python renderer when lupa is unavailable.
+    if HAS_LUPA:
+        try:
+            run_lua_driven_emulator(LUA_PATH)
+            return
+        except Exception as exc:
+            print(f"Lua-driven mode unavailable, falling back to legacy renderer: {exc}", file=sys.stderr)
 
     L = make_layout(parse_lua(LUA_PATH))
 
@@ -742,6 +1164,7 @@ def main():
     _mtime_check  = 0    # ticks of last mtime poll
     menu_open = False
     menu_tile_idx = None
+    menu_scroll = 0
     last_click_ms = 0
     tile_slots = load_tile_slots(LUA_PATH, 12)
 
@@ -774,10 +1197,15 @@ def main():
                     tile_slots = load_tile_slots(LUA_PATH, len(base_tiles))
 
                 if menu_open and menu_tile_idx is not None:
-                    metric_idx = menu_metric_at(mx, my, len(base_tiles))
-                    if metric_idx is not None:
-                        tile_slots[menu_tile_idx] = metric_idx
-                        save_tile_slots(LUA_PATH, tile_slots, len(base_tiles))
+                    pick = menu_metric_at(mx, my, len(base_tiles), menu_scroll)
+                    if pick is not None:
+                        kind, metric_idx = pick
+                        if kind == 'metric' and metric_idx is not None:
+                            tile_slots[menu_tile_idx] = metric_idx
+                            save_tile_slots(LUA_PATH, tile_slots, len(base_tiles))
+                        elif kind == 'reset':
+                            tile_slots = list(range(len(base_tiles)))
+                            save_tile_slots(LUA_PATH, tile_slots, len(base_tiles))
                     menu_open = False
                     menu_tile_idx = None
                     continue
@@ -787,6 +1215,14 @@ def main():
                 if hit_idx is not None:
                     menu_open = True
                     menu_tile_idx = hit_idx
+                    visible = min(len(base_tiles), MENU_MAX_ROWS)
+                    max_scroll = max(0, len(base_tiles) - visible)
+                    current = tile_slots[menu_tile_idx] if menu_tile_idx < len(tile_slots) else menu_tile_idx
+                    menu_scroll = max(0, min(max_scroll, current - visible // 2))
+            elif ev.type == pygame.MOUSEWHEEL and menu_open:
+                visible = min(len(tile_slots), MENU_MAX_ROWS)
+                max_scroll = max(0, len(tile_slots) - visible)
+                menu_scroll = max(0, min(max_scroll, menu_scroll - ev.y))
 
         # ── Auto-reload when file changes (poll every ~1 s) ──
         now = pygame.time.get_ticks()
@@ -823,7 +1259,7 @@ def main():
             else:
                 current_idx = max(0, min(len(base_tiles) - 1, tile_slots[menu_tile_idx]))
                 labels = [t[0] for t in base_tiles]
-                draw_metric_menu(surf, labels, current_idx, menu_tile_idx)
+                draw_metric_menu(surf, labels, current_idx, menu_tile_idx, menu_scroll)
 
         draw_frame(surf)
         draw_header(surf, mode, armed, fm_str)

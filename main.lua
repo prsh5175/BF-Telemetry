@@ -7,7 +7,7 @@ local OPTIONS = {
   { "WarnV",   VALUE, 36, 30, 42 },
   { "CritV",   VALUE, 34, 30, 42 },
   { "LQWrn",   VALUE, 70, 10, 99 },
-  { "Mode",    VALUE,  0,  0,  2 },
+  { "ScreenType", VALUE,  0,  0,  2 },
   { "Theme",   VALUE,  0,  0,  3 },
   { "ThrOn",   VALUE,  5,  0, 50 },
   { "ArmSrc", SOURCE,  0 },
@@ -281,6 +281,13 @@ local function cVolt(cV, wV, kV)
   return C_RED
 end
 
+local function cBattPct(p)
+  if p == nil then return C_DIM end
+  if p > 50 then return C_GREEN end
+  if p > 25 then return C_YELLOW end
+  return C_RED
+end
+
 -- =========================================================================
 --  LAYOUT CONSTANTS
 --  Screen: 800 x 480
@@ -325,7 +332,7 @@ local HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
 local HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
 local HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
 
-local MENU_W = 380
+local MENU_W = 460
 local MENU_X = math.floor((800 - MENU_W) / 2)
 local MENU_ROW_H = 38
 local MENU_TITLE_H = 28
@@ -338,6 +345,7 @@ local _touchUi = {
   open = false,
   tile = nil,
   lastTap = 0,
+  ignoreDismissUntil = 0,
   isDown = false,
   downKind = nil,
   downIndex = nil,
@@ -511,9 +519,73 @@ local GAUGE_ARC_THICK = 96
 -- Cache system: store last rendered state per gauge instance
 local _gaugeCache = {}  -- { "key" = { lastPct, cx, cy, r, thick, aS, aE } }
 local _gaugeBgCache = {}  -- { "key" = true } - background rendered once
+local _gaugeBgBuildBudget = 2  -- max uncached gauge backgrounds to build per refresh
+local _dialBmp = nil
+local _dialBmpTried = false
+local _dialBmpDrawSig = 0  -- 0 unknown, 1 drawBitmap(bmp,x,y), 2 drawBitmap(x,y,bmp), -1 unsupported
+
+local DIAL_BMP_W = 88
+local DIAL_BMP_H = 46
+local DIAL_BMP_OFF_X = 0
+local DIAL_BMP_OFF_Y = 0
+
+-- Use a pre-rendered transparent PNG dial background to keep Mode 2 CPU low.
+-- Recommended asset path: /WIDGETS/BFTelem/assets/dial_bg.png
+-- Recommended size: 88x46 (or similar), no runtime scaling.
+local function getDialBitmap()
+  if _dialBmpTried then return _dialBmp end
+  _dialBmpTried = true
+  if not Bitmap or not Bitmap.open then return nil end
+
+  local candidates = {
+    "/WIDGETS/BFTelem/assets/dial_bg.png",
+    "/WIDGETS/BFTelem/assets/dial_bg.bmp",
+    "/WIDGETS/BFTelem/assets/gauge_bg.png",
+    "/WIDGETS/BFTelem/assets/gauge_bg.bmp",
+  }
+
+  for i = 1, #candidates do
+    local ok, bmp = pcall(Bitmap.open, candidates[i])
+    if ok and bmp then
+      _dialBmp = bmp
+      break
+    end
+  end
+  return _dialBmp
+end
+
+local function drawDialBitmap(bmp, x, y)
+  if not bmp or not lcd or not lcd.drawBitmap then return false end
+  if _dialBmpDrawSig == 1 then
+    lcd.drawBitmap(bmp, x, y)
+    return true
+  elseif _dialBmpDrawSig == 2 then
+    lcd.drawBitmap(x, y, bmp)
+    return true
+  elseif _dialBmpDrawSig == -1 then
+    return false
+  end
+
+  local ok = pcall(lcd.drawBitmap, bmp, x, y)
+  if ok then
+    _dialBmpDrawSig = 1
+    return true
+  end
+  ok = pcall(lcd.drawBitmap, x, y, bmp)
+  if ok then
+    _dialBmpDrawSig = 2
+    return true
+  end
+
+  _dialBmpDrawSig = -1
+  return false
+end
 
 local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
-  steps = steps or 56
+  -- Reduce steps for smaller radii to save CPU
+  if not steps then
+    steps = math.max(24, math.floor(r * 1.4))
+  end
   local da = (a2 - a1) / steps
   local px, py
   for i = 0, steps do
@@ -526,63 +598,85 @@ local function drawArcSeg(cx, cy, r, a1, a2, col, steps)
 end
 
 local function drawArcBand(cx, cy, r, a1, a2, coreCol, midCol, edgeCol, thick)
-  local half = math.max(1, math.floor((thick or 10) / 2))
-  local steps = math.max(56, math.floor(r * 2.2))
-  for off = -half, half do
-    local rr = r + off
-    if rr > 0 then
-      local d = math.abs(off)
-      if d >= half then
-        drawArcSeg(cx, cy, rr, a1, a2, edgeCol, steps)
-      elseif d >= (half - 1) then
-        drawArcSeg(cx, cy, rr, a1, a2, midCol, steps)
-      else
-        drawArcSeg(cx, cy, rr, a1, a2, coreCol, steps)
-      end
-    end
+  local t = thick or 10
+  local steps = math.max(14, math.floor(r * 0.7))
+
+  -- Lightweight 3-5 stroke arc band (instead of dozens of concentric strokes).
+  drawArcSeg(cx, cy, r, a1, a2, coreCol, steps)
+  drawArcSeg(cx, cy, r - 1, a1, a2, coreCol, steps)
+  drawArcSeg(cx, cy, r + 1, a1, a2, coreCol, steps)
+
+  if t >= 8 then
+    drawArcSeg(cx, cy, r - 2, a1, a2, midCol, steps)
+    drawArcSeg(cx, cy, r + 2, a1, a2, edgeCol, steps)
+  end
+
+  if t >= 12 then
+    drawArcSeg(cx, cy, r - 3, a1, a2, edgeCol, steps)
   end
 end
 
--- Faster needle: draw triangle + center dot instead of 3 rectangles
-local function drawNeedleTriangle(cx, cy, r, angleRad, col)
-  local nx = cx + math.floor((r - 1) * math.cos(angleRad) + 0.5)
-  local ny = cy + math.floor((r - 1) * math.sin(angleRad) + 0.5)
-  
-  -- Perpendicular direction for needle width
-  local perpAngle = angleRad + _PI / 2
-  local w = 4
-  local wx = math.floor(w * math.cos(perpAngle))
-  local wy = math.floor(w * math.sin(perpAngle))
-  
-  -- Triangle: needle point + two base corners
-  local x1, y1 = nx, ny
-  local x2, y2 = cx + wx, cy + wy
-  local x3, y3 = cx - wx, cy - wy
-  
-  -- Draw filled triangle (using three lines as filled polygon)
-  lcd.drawFilledRectangle(math.min(x1,x2,x3)-1, math.min(y1,y2,y3)-1, 
-                          math.max(x1,x2,x3)-math.min(x1,x2,x3)+2,
-                          math.max(y1,y2,y3)-math.min(y1,y2,y3)+2, C_SIL_DK)
-  
-  -- Draw bright needle
-  lcd.drawLine(x1, y1, x2, y2, 0xFF, col)
-  lcd.drawLine(x1, y1, x3, y3, 0xFF, col)
-  lcd.drawLine(x2, y2, x3, y3, 0xFF, col)
-  
-  -- Center dot
-  lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
-  lcd.drawFilledRectangle(cx-1, cy-1, 3, 3, C_WHITE)
+local function drawGaugeTicks(cx, cy, r, aS, aE)
+  local major = 8
+  local minorPerSeg = 0
+  local totalMinor = major * (minorPerSeg + 1)
+  local span = aS - aE
+
+  for i = 0, totalMinor do
+    local a = aS - span * (i / totalMinor)
+    local isMajor = (i % (minorPerSeg + 1) == 0)
+    local inR = isMajor and (r - 16) or (r - 11)
+    local outR = r - 3
+    local x1 = cx + math.floor(inR * math.cos(a) + 0.5)
+    local y1 = cy + math.floor(inR * math.sin(a) + 0.5)
+    local x2 = cx + math.floor(outR * math.cos(a) + 0.5)
+    local y2 = cy + math.floor(outR * math.sin(a) + 0.5)
+    lcd.drawLine(x1, y1, x2, y2, 0xFF, isMajor and C_SIL_HI or C_SIL_MID)
+  end
+end
+
+local function drawNeedleMotorbike(cx, cy, r, angleRad, col)
+  local tipR = r - 2
+  local shaftR = r - 16
+  local tailR = 8
+
+  local tipX = cx + math.floor(tipR * math.cos(angleRad) + 0.5)
+  local tipY = cy + math.floor(tipR * math.sin(angleRad) + 0.5)
+  local shaftX = cx + math.floor(shaftR * math.cos(angleRad) + 0.5)
+  local shaftY = cy + math.floor(shaftR * math.sin(angleRad) + 0.5)
+
+  local tailA = angleRad + _PI
+  local tailX = cx + math.floor(tailR * math.cos(tailA) + 0.5)
+  local tailY = cy + math.floor(tailR * math.sin(tailA) + 0.5)
+
+  local perpA = angleRad + _PI / 2
+  local w = 2
+  local wx = math.floor(w * math.cos(perpA) + 0.5)
+  local wy = math.floor(w * math.sin(perpA) + 0.5)
+
+  -- Lightweight needle: one shaft plus compact arrowhead.
+  lcd.drawLine(tailX, tailY, tipX, tipY, 0xFF, col)
+  lcd.drawLine(tipX, tipY, shaftX + wx, shaftY + wy, 0xFF, col)
+  lcd.drawLine(tipX, tipY, shaftX - wx, shaftY - wy, 0xFF, col)
+
+  -- Hub cap.
+  lcd.drawFilledRectangle(cx - 4, cy - 4, 9, 9, C_SIL_DK)
+  lcd.drawFilledRectangle(cx - 2, cy - 2, 5, 5, C_SIL_HI)
+  lcd.drawFilledRectangle(cx - 1, cy - 1, 3, 3, C_WHITE)
 end
 
 local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
 
   -- Keep gauge thick but always bounded inside the tile.
-  local thick = math.max(8, math.min(GAUGE_ARC_THICK, math.floor(math.min(tw, th) * 0.18)))
+  local thick = math.max(6, math.min(GAUGE_ARC_THICK, math.floor(math.min(tw, th) * 0.13)))
   local halfT = math.floor(thick / 2)
-  local r = math.floor(math.min(tw * 0.28, th * 0.28))
+  local r = math.floor(math.min(tw * 0.32, th * 0.32))
+  local maxRByWidth = math.floor((tw - 10 - (halfT * 2)) / 2)
   local maxRByHeight = math.floor((th - 14 - (halfT * 2)) / 2)
+  if maxRByWidth < 8 then maxRByWidth = 8 end
   if maxRByHeight < 8 then maxRByHeight = 8 end
+  if r > maxRByWidth then r = maxRByWidth end
   if r > maxRByHeight then r = maxRByHeight end
 
   local cyMin = ty + 8 + r + halfT
@@ -597,26 +691,34 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   -- Create cache key based on gauge geometry
   local cacheKey = string.format("%.0f_%.0f_%.0f_%.0f", cx, cy, r, thick)
   
-  -- Draw background arc ONCE and cache it
-  if not _gaugeBgCache[cacheKey] then
+  -- Draw background arc ONCE and cache it (budgeted to avoid CPU spikes).
+  if (not _gaugeBgCache[cacheKey]) and (_gaugeBgBuildBudget > 0) then
     drawArcBand(cx, cy, r, aS, aE, C_SIL_LO, C_SIL_DK, C_CF1, thick)
+
+    -- Red zone near the top end for a sport-bike cluster feel.
+    local aRed = aS - (aS - aE) * 0.84
+    drawArcBand(cx, cy, r + math.floor(thick * 0.30), aRed, aE,
+      C_RED, C_ORANGE, C_SIL_DK, math.max(3, math.floor(thick * 0.14)))
+
+    drawGaugeTicks(cx, cy, r, aS, aE)
     _gaugeBgCache[cacheKey] = true
+    _gaugeBgBuildBudget = _gaugeBgBuildBudget - 1
   end
 
-  -- Only redraw needle + filled arc if percentage changed by >1%
+  -- Only redraw needle + filled arc if percentage changed by >=4%
   local lastPct = _gaugeCache[cacheKey] or -999
-  local pctFloor = math.floor((pct or 0) + 0.5)
-  local lastPctFloor = math.floor(lastPct + 0.5)
+  local pctFloor = math.floor((pct or 0) / 4 + 0.5)  -- Round to nearest 4%
+  local lastPctFloor = math.floor(lastPct / 4 + 0.5)
   
-  if math.abs(pctFloor - lastPctFloor) > 1 then
+  if pctFloor ~= lastPctFloor then
     if pct and pct > 0 then
       local aV = aS - (aS - aE) * math.min(pct, 100) / 100
 
-      -- Active track: bright center with faded edges
-      drawArcBand(cx, cy, r, aS, aV, col or C_GREEN, C_SIL_MID, C_SIL_DK, thick)
+      -- Active track: lightweight single arc sweep for CPU safety.
+      drawArcSeg(cx, cy, r, aS, aV, col or C_GREEN, math.max(14, math.floor(r * 0.7)))
 
-      -- Draw optimized needle (triangle is faster than 3 rectangles)
-      drawNeedleTriangle(cx, cy, r, aV, col or C_GREEN)
+      -- Draw motorbike-style pointer needle.
+      drawNeedleMotorbike(cx, cy, r, aV, col or C_GREEN)
     else
       -- Draw center dot only when pct is 0
       lcd.drawFilledRectangle(cx-2, cy-2, 5, 5, C_SIL_HI)
@@ -631,6 +733,69 @@ local function drawGauge(tx, ty, tw, th, pct, col, val_str, unit_str)
   end
   if unit_str then
     lcd.drawText(cx, cy + 2, unit_str, SMLSIZE+CENTER+C_DIM)
+  end
+end
+
+local function drawGaugeLite(tx, ty, tw, th, pct, col, val_str, unit_str)
+  local cx = math.floor(tx + tw / 2)
+  local cy = math.floor(ty + th * 0.62)
+  local r = math.floor(math.min(tw * 0.30, th * 0.30))
+  if r < 10 then r = 10 end
+
+  local xL = cx - r + 5
+  local xR = cx + r - 5
+  local yB = cy + 2
+  local yT = cy - r + 6
+  local xM1 = cx - math.floor(r * 0.45)
+  local xM2 = cx + math.floor(r * 0.45)
+
+  local dialBmp = getDialBitmap()
+  local yPivot = cy
+  if dialBmp then
+    -- Place static dial art with fixed footprint (no runtime scaling).
+    local bw = DIAL_BMP_W
+    local bh = DIAL_BMP_H
+    local bx = cx - math.floor(bw / 2) + DIAL_BMP_OFF_X
+    local by = cy - math.floor(bh * 0.88) + DIAL_BMP_OFF_Y
+    drawDialBitmap(dialBmp, bx, by)
+
+    -- Needle track aligned to dial bitmap geometry.
+    xL = bx + 10
+    xR = bx + bw - 10
+    yB = by + bh - 3
+    yT = by + 7
+    yPivot = yB
+  else
+    -- Fallback: low-cost stylized gauge arc.
+    lcd.drawLine(xL, yB, xM1, yT, 0xFF, C_SIL_MID)
+    lcd.drawLine(xM1, yT, xM2, yT, 0xFF, C_SIL_HI)
+    lcd.drawLine(xM2, yT, xR, yB, 0xFF, C_SIL_MID)
+  end
+
+  local p = math.max(0, math.min(100, pct or 0))
+  local idx = math.floor(p / 10 + 0.5)
+  if idx < 0 then idx = 0 end
+  if idx > 10 then idx = 10 end
+  local t = idx / 10
+  local nx = math.floor(xL + (xR - xL) * t + 0.5)
+  local ny
+  if t <= 0.5 then
+    local k = t * 2
+    ny = math.floor(yB + (yT - yB) * k + 0.5)
+  else
+    local k = (t - 0.5) * 2
+    ny = math.floor(yT + (yB - yT) * k + 0.5)
+  end
+
+  -- Needle and hub.
+  lcd.drawLine(cx, yPivot, nx, ny, 0xFF, col or C_GREEN)
+  lcd.drawFilledRectangle(cx - 1, yPivot - 1, 3, 3, C_WHITE)
+
+  if val_str then
+    lcd.drawText(cx, cy - 12, val_str, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
+  end
+  if unit_str then
+    lcd.drawText(cx, cy + 2, unit_str, SMLSIZE + CENTER + C_DIM)
   end
 end
 
@@ -807,6 +972,23 @@ local function optionsAllLinkQ(options)
   return true
 end
 
+local function getScreenType(options)
+  if type(options) ~= "table" then return 0 end
+  local v = options.ScreenType
+  if v == nil then v = options["Screen type"] end
+  if v == nil then v = options.Mode end
+  if type(v) ~= "number" then return 0 end
+  return clampInt(math.floor(v), 0, 2)
+end
+
+local function setScreenType(options, v)
+  if type(options) ~= "table" then return end
+  local m = clampInt(math.floor(tonumber(v) or 0), 0, 2)
+  options.ScreenType = m
+  options["Screen type"] = m
+  options.Mode = m
+end
+
 local function tileStorageKey()
   local modelName = "default"
   if model and model.getInfo then
@@ -821,7 +1003,7 @@ end
 local function saveTileSlotsToStorage(options)
   if not storage or not storage.write then return end
   local out = {}
-  local mode = clampInt(math.floor((options and options.Mode) or 0), 0, 2)
+  local mode = getScreenType(options)
   for i = 1, #METRICS do
     out[i] = (_tileSlots[i] or i) - 1
   end
@@ -848,7 +1030,7 @@ local function loadTileSlotsFromStorage(options)
   end
 
   if options and type(saved.mode) == "number" then
-    options.Mode = clampInt(math.floor(saved.mode), 0, 2)
+    setScreenType(options, saved.mode)
   end
 
   return loadedAny
@@ -949,7 +1131,16 @@ local function handleTouch(widget, touchState)
           _touchUi.downMoved = false
           _touchUi.scrollStart = _touchUi.menuScroll or 0
         else
-          resetTouchDownState()
+          local now = getTime() or 0
+          if now >= (_touchUi.ignoreDismissUntil or 0) then
+            _touchUi.downKind = "menuDismiss"
+            _touchUi.downIndex = nil
+            _touchUi.downX = x
+            _touchUi.downY = y
+            _touchUi.downMoved = false
+          else
+            resetTouchDownState()
+          end
         end
       else
         local tile = tileAtPoint(x, y, #_tileSlots)
@@ -998,6 +1189,7 @@ local function handleTouch(widget, touchState)
     _touchUi.open = true
     _touchUi.tile = downIndex
     _touchUi.menuScroll = 0
+    _touchUi.ignoreDismissUntil = (getTime() or 0) + 12
     return
   end
 
@@ -1015,6 +1207,13 @@ local function handleTouch(widget, touchState)
     end
     _touchUi.open = false
     _touchUi.tile = nil
+    _touchUi.ignoreDismissUntil = 0
+  end
+
+  if downKind == "menuDismiss" and _touchUi.open then
+    _touchUi.open = false
+    _touchUi.tile = nil
+    _touchUi.ignoreDismissUntil = 0
   end
 end
 
@@ -1044,12 +1243,14 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
 
   if mode == 1 then
+    local mCol = (d.pct ~= nil) and cPct(d.pct) or (d.col or C_WHITE)
     local pad = math.max(8, math.floor(tw * 0.14))
-    drawBar(tx + pad, ty + math.floor(th * 0.33), tw - 2 * pad, math.floor(th * 0.54), d.pct, d.col)
-    lcd.drawText(cx, yLbl + 14, d.val, SMLSIZE + CENTER + BOLD + (d.col or C_WHITE))
+    drawBar(tx + pad, ty + math.floor(th * 0.33), tw - 2 * pad, math.floor(th * 0.54), d.pct, mCol)
+    lcd.drawText(cx, yLbl + 14, d.val, SMLSIZE + CENTER + BOLD + mCol)
   elseif mode == 2 then
+    local mCol = (d.pct ~= nil) and cPct(d.pct) or (d.col or C_WHITE)
     local pad = math.max(8, math.floor(tw * 0.14))
-    drawGauge(tx + pad, ty + 6, tw - 2 * pad, th - 14, d.pct, d.col, d.val, d.unit)
+    drawGaugeLite(tx + pad, ty + 6, tw - 2 * pad, th - 14, d.pct, mCol, d.val, d.unit)
   else
     lcd.drawText(cx, yVal, d.val, MIDSIZE + BOLD + CENTER + (d.col or C_WHITE))
     if d.unit and d.unit ~= "" then
@@ -1090,7 +1291,9 @@ local function drawHeader(o)
   if _lastArmed then
     drawHeaderText(530, 10, "ARMED", C_RED)
   else
-    drawHeaderText(530, 10, "DISARMED", C_GREEN)
+    local s = "DISARMED"
+    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_GREEN)
   end
   -- TX voltage top-right
   local txv = getValue("tx-voltage")
@@ -1098,16 +1301,97 @@ local function drawHeader(o)
     lcd.drawText(785, 8, string.format("TX %.1fV", txv),
       SMLSIZE+RIGHT+(txv > 7.0 and C_GREEN or C_RED))
   end
-  -- mode label bottom-right
-  local mLbl = (o.Mode==1) and "[ BAR ]" or (o.Mode==2) and "[GAUGE]" or "[ NUM ]"
+  -- screen type label bottom-right
+  local st = getScreenType(o)
+  local mLbl = (st==1) and "SCR: BAR" or (st==2) and "SCR: GAUGE" or "SCR: NUM"
   lcd.drawText(785, 56, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
+end
+
+-- =========================================================================
+--  SIDE BATTERY BARS (outside hex pit, inside frame side rails)
+-- =========================================================================
+local function pctFromTxVoltage(v)
+  if type(v) ~= "number" then return nil end
+  -- 2S TX packs are commonly around 8.4V full and 6.6V near empty.
+  local p = (v - 6.6) / (8.4 - 6.6) * 100
+  return math.max(0, math.min(100, p))
+end
+
+local function pctFromRxCellVoltage(v, cells)
+  if type(v) ~= "number" then return nil end
+  local nc = math.max(1, math.floor(tonumber(cells) or 1))
+  local cv = v / nc
+  local p = (cv - 3.9) / (4.2 - 3.9) * 100
+  return math.max(0, math.min(100, p))
+end
+
+local function drawSideBar(x, y, w, h, pct, label)
+  local labelTop = y + 2
+  local barTop = y + 40
+  local pctY = y + h - 10
+  local barBottom = pctY - 4
+  local textCx = x + w/2
+
+  -- Draw label on two lines if it contains a space.
+  local labelStr = tostring(label or "")
+  local line1, line2 = string.match(labelStr, "^(%S+)%s+(%S+)$")
+  if line1 then
+    lcd.drawText(textCx, labelTop, line1, SMLSIZE + CENTER + C_SIL_HI)
+    lcd.drawText(textCx, labelTop + 12, line2, SMLSIZE + CENTER + C_SIL_HI)
+  else
+    lcd.drawText(textCx, labelTop + 6, labelStr, SMLSIZE + CENTER + C_SIL_HI)
+    barTop = y + 36
+  end
+
+  local barH = barBottom - barTop
+  if barH < 30 then return end
+
+  local segCount = 10
+  local gap = 2
+  local segH = math.floor((barH - gap * (segCount - 1)) / segCount)
+  if segH < 3 then segH = 3 end
+  local lit = pct and math.floor((pct / 100) * segCount + 0.5) or 0
+  lit = clampInt(lit, 0, segCount)
+
+  lcd.drawRectangle(x - 2, barTop - 2, w + 4, barH + 4, C_SIL_LO)
+
+  for i = 1, segCount do
+    local idxFromBottom = segCount - i + 1
+    local sy = barTop + (i - 1) * (segH + gap)
+    local on = idxFromBottom <= lit
+    local col = on and cBattPct((idxFromBottom / segCount) * 100) or C_SIL_DK
+    lcd.drawFilledRectangle(x, sy, w, segH, col)
+    lcd.drawRectangle(x, sy, w, segH, C_CF1)
+  end
+
+  local ptxt = pct and string.format("%d%%", math.floor(pct + 0.5)) or "---"
+  lcd.drawText(textCx, pctY, ptxt, SMLSIZE + CENTER + (pct and cBattPct(pct) or C_DIM))
+end
+
+local function drawSideBatteryBars(o)
+  local railPadX = 0
+  local railW = FRM_L - (railPadX * 2)
+  if railW < 12 then return end
+
+  local y = TOP_MID + 16
+  local h = 480 - TOP_MID - FRM_B - 34
+  if h < 80 then return end
+
+  local txv = getValue("tx-voltage")
+  local txPct = pctFromTxVoltage(txv)
+
+  local rxv = getS(SN_VOLT)
+  local rxPct = pctFromRxCellVoltage(rxv, o and o.Cells)
+
+  drawSideBar(railPadX, y, railW, h, txPct, "TX batt")
+  drawSideBar(800 - FRM_R + railPadX, y, railW, h, rxPct, "RX batt")
 end
 
 -- =========================================================================
 --  GRID
 -- =========================================================================
 local function drawGrid(opts)
-  local mode = opts.Mode or 0
+  local mode = getScreenType(opts)
   for i = 1, #_tileSlots do
     local metricIdx = _tileSlots[i] or i
     local metric = METRICS[metricIdx] or METRICS[i]
@@ -1163,6 +1447,7 @@ end
 local function background(widget)      tickArmTimer(widget.options) end
 
 local function refresh(widget, event, touchState)
+  _gaugeBgBuildBudget = 2
   initColors(widget.options and widget.options.Theme)
   if #_tileSlots ~= #METRICS then
     syncTileSlotsFromOptions(widget.options)
@@ -1174,6 +1459,7 @@ local function refresh(widget, event, touchState)
   drawGrid(widget.options)
   drawMetricMenu()
   drawCarbonFrame()
+  drawSideBatteryBars(widget.options)
   drawHeader(widget.options)
 end
 

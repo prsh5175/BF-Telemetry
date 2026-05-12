@@ -115,7 +115,15 @@ A Python-based desktop emulator lets you preview and develop the widget without 
 
 - Python 3.8+
 - `tkinter` (included with most Python distributions)
+- `pygame`
+- `lupa` (for Lua-driven mode that executes `main.lua` directly)
 - `emulator.py` placed in the **same folder** as `launcher.py`
+
+Install dependencies:
+
+```bash
+pip install pygame lupa
+```
 
 ### Launch
 
@@ -124,6 +132,11 @@ python launcher.py
 ```
 
 `launcher.py` locates `emulator.py` next to itself at runtime, so you can edit `emulator.py` freely without rebuilding anything. If `emulator.py` is missing, a dialog box will report the expected path.
+
+Lua-driven mode:
+
+- If `lupa` is installed, the emulator runs `main.lua` directly and hot-reloads visual/logic changes automatically.
+- If `lupa` is not installed, it falls back to legacy Python-rendered emulation.
 
 ---
 
