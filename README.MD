@@ -17,6 +17,36 @@ An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, des
 
 ## Installation
 
+### Recommended (Drag-and-Drop This Repo)
+
+This repository now includes top-level EdgeTX SD folders:
+
+```
+WIDGETS/
+SOUNDS/
+SCRIPTS/
+```
+
+After downloading and unzipping, copy these folders directly to the root of your EdgeTX SD card.
+
+Main widget path after copy:
+
+```
+/WIDGETS/BFTelem/main.lua
+```
+
+The repository also keeps a secondary prepacked mirror in `sdcard/` for release packaging workflows.
+
+Square theme variant is also included at:
+
+```
+/WIDGETS/BFTelem/main.square.lua
+```
+
+If you want the square theme, replace `main.lua` with `main.square.lua`.
+
+### Manual (Single File)
+
 1. Copy `main.lua` into a new folder on your radio's SD card:
    ```
    /WIDGETS/BFTelem/main.lua
@@ -81,6 +111,12 @@ Set these values to match your aircraft and battery:
 | `WarnV` | 36 | 30 – 42 | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
 | `CritV` | 34 | 30 – 42 | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
 | `LQWrn` | 70 | 10 – 99 | Link quality % below which LINK Q turns yellow/red |
+| `SndEn` | 1 | 0 – 1 | Master sound alerts (`0` off, `1` on) |
+| `SndArmd` | 1 | 0 – 1 | Play ARMED / DISARMED voice alerts |
+| `SndBatt` | 1 | 0 – 1 | Play battery low/critical voice alerts |
+| `SndRSSI` | 1 | 0 – 1 | Play low RSSI voice alerts |
+| `RSSIWrn` | 90 | 60 – 120 | RSSI warning threshold in absolute dBm (e.g. 90 = -90 dBm) |
+| `SndRpt` | 15 | 5 – 120 | Repeat period (seconds) while an alert condition persists |
 | `TmrRed` | 180 | 30 – 900 | Flight timer (seconds) at which the timer tile turns red |
 | `DistRed` | 100 | 20 – 2000 | Distance (metres) at which the DIST tile turns red |
 | `ScreenType` | 0 | 0 – 2 | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
@@ -88,6 +124,35 @@ Set these values to match your aircraft and battery:
 | `ArmSrc` | — | source | Optional: EdgeTX source for the arm switch/channel |
 
 > **Tip:** If you fly 6S, set `Cells = 6`, `FullV = 42`, `WarnV = 36`, `CritV = 34`. All tile colours and percentages adjust automatically.
+
+### Sound Files
+
+**By default**, BF Telemetry uses existing **EdgeTX system voice files** for all announcements, so you get audio alerts automatically without any setup.
+
+Voice file lookup order:
+
+1. **Custom widget sounds** in `/WIDGETS/BFTelem/sounds/` (override EdgeTX system voices)
+2. **EdgeTX system voices** in `/SOUNDS/en/` (default; built into EdgeTX)
+3. **Tone beep fallback** (if neither above exists)
+
+Default EdgeTX system voice mappings:
+
+| Alert | System Voice | Fallback |
+|-------|--------------|----------|
+| ARMED | `armed.wav` | 2200 Hz tone |
+| DISARMED | `disarmed.wav` | 1200 Hz tone |
+| Battery Low | `bat1.wav` | 1300 Hz tone |
+| Battery Critical | `bat0.wav` | 900 Hz tone |
+| Low RSSI | `rssiloss.wav` | 1600 Hz tone |
+
+**Optional:** To override with custom voices, place WAV files in `/WIDGETS/BFTelem/sounds/` with these names:
+- `armed.wav`
+- `disarmed.wav`
+- `batlow.wav`
+- `batcrit.wav`
+- `lowrssi.wav`
+
+The widget will use custom files in preference to EdgeTX system voices.
 
 ---
 
