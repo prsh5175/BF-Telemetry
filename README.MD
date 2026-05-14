@@ -106,7 +106,7 @@ Set these values to match your aircraft and battery:
 
 | Option | Default | Range | What to set |
 |---|---|---|---|
-| `Cells` | 4 | 1 – 8 | Number of LiPo cells (e.g. 4 for 4S) |
+| `Cells` | 0 | 0 – 8 | `0` = Auto-detect from pack voltage (recommended). `1..8` = manual override |
 | `FullV` | 42 | 30 – 50 | Full cell voltage × 10 (42 = 4.2 V/cell; use 42 for standard LiPo) |
 | `WarnV` | 36 | 30 – 42 | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
 | `CritV` | 34 | 30 – 42 | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
@@ -123,7 +123,7 @@ Set these values to match your aircraft and battery:
 | `ThrOn` | 5 | 0 – 50 | Throttle % threshold to start the flight timer |
 | `ArmSrc` | — | source | Optional: EdgeTX source for the arm switch/channel |
 
-> **Tip:** If you fly 6S, set `Cells = 6`, `FullV = 42`, `WarnV = 36`, `CritV = 34`. All tile colours and percentages adjust automatically.
+> **Tip:** `Cells = 0` is best if you switch models (1S whoop, 6S cinewhoop, etc.). The widget auto-detects cell count from `RxBt` pack voltage and falls back safely if a manual value is inconsistent.
 
 ### Sound Files
 
@@ -196,7 +196,7 @@ Each of the 12 hex tiles can be set to display any metric you want.
 
 Two vertical bar graphs run along the left and right edges of the screen:
 
-- **Left bar — RX batt:** Your drone's LiPo pack level, calculated from per-cell voltage using the `Cells` setting.
+- **Left bar — RX batt:** Your drone's LiPo pack level, calculated from per-cell voltage with auto cell-count detection (`Cells=0`) or manual override.
 - **Right bar — TX batt:** Your radio's internal 2S LiPo level, estimated from the TX voltage.
 
 Both bars use **10 color-coded segments**: green (top) → yellow (middle) → red (bottom). The percentage is shown below each bar. The bars update live during flight.
