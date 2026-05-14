@@ -144,6 +144,7 @@ Default EdgeTX system voice mappings:
 | Battery Low | `bat1.wav` | 1300 Hz tone |
 | Battery Critical | `bat0.wav` | 900 Hz tone |
 | Low RSSI | `rssiloss.wav` | 1600 Hz tone |
+| No GPS Fix (arm attempt) | *(none — triple buzzer beep)* | descending 3-tone beep |
 
 **Optional:** To override with custom voices, place WAV files in `/WIDGETS/BFTelem/sounds/` with these names:
 - `armed.wav`
@@ -151,6 +152,7 @@ Default EdgeTX system voice mappings:
 - `batlow.wav`
 - `batcrit.wav`
 - `lowrssi.wav`
+- `nogpsfix.wav` *(optional custom voice, e.g. "Not ready to arm, waiting for GPS")*
 
 The widget will use custom files in preference to EdgeTX system voices.
 

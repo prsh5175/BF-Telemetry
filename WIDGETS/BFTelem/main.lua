@@ -4,7 +4,7 @@
 -- and a time-of-day clock in the top-right pit gap.
 
 local OPTIONS = {
-  { "Cells",   VALUE,  4,  1,  8 },
+  { "Craft Batt Cells", VALUE,  0,  0,  8 },
   { "FullV",   VALUE, 42, 30, 50 },
   { "WarnV",   VALUE, 36, 30, 42 },
   { "CritV",   VALUE, 34, 30, 42 },
@@ -24,17 +24,17 @@ local OPTIONS = {
   { "ThrOn",   VALUE,  5,  0, 50 },
   { "ArmSrc", SOURCE,  0 },
   { "T1",      VALUE,  0,  0, 11 },
-  { "T2",      VALUE,  1,  0, 11 },
-  { "T3",      VALUE,  2,  0, 11 },
-  { "T4",      VALUE,  3,  0, 11 },
-  { "T5",      VALUE,  4,  0, 11 },
-  { "T6",      VALUE,  5,  0, 11 },
-  { "T7",      VALUE,  6,  0, 11 },
-  { "T8",      VALUE,  7,  0, 11 },
-  { "T9",      VALUE,  8,  0, 11 },
-  { "T10",     VALUE,  9,  0, 11 },
-  { "T11",     VALUE, 10,  0, 11 },
-  { "T12",     VALUE, 11,  0, 11 },
+  { "T2",      VALUE,  0,  0, 11 },
+  { "T3",      VALUE,  0,  0, 11 },
+  { "T4",      VALUE,  0,  0, 11 },
+  { "T5",      VALUE,  0,  0, 11 },
+  { "T6",      VALUE,  0,  0, 11 },
+  { "T7",      VALUE,  0,  0, 11 },
+  { "T8",      VALUE,  0,  0, 11 },
+  { "T9",      VALUE,  0,  0, 11 },
+  { "T10",     VALUE,  0,  0, 11 },
+  { "T11",     VALUE,  0,  0, 11 },
+  { "T12",     VALUE,  0,  0, 11 },
   { "TmrRed",  VALUE, 180, 30, 900 },
   { "DistRed", VALUE, 100, 20, 2000 },
 }
@@ -50,6 +50,7 @@ local SN_FM    = "FM"
 local SN_TPWR  = "TPWR"
 local SN_RFMD  = "RFMD"
 local SN_DIST  = "Dist"
+local SN_SATS  = "Sats"
 
 -- =========================================================================
 --  COLORS
@@ -270,6 +271,8 @@ local _soundPaths = {
   "/SOUNDS/en/",
 }
 
+local _nogpsOverlayUntil = 0   -- getTime() deadline while NO GPS banner is visible
+
 local _alerts = {
   lastRun = 0,
   armedPrev = false,
@@ -279,11 +282,13 @@ local _alerts = {
   failsafe = false,
   distHigh = false,
   altHigh = false,
+  armSwitchPrev = false,
   nextBatt = 0,
   nextRssi = 0,
   nextLq = 0,
   nextDist = 0,
   nextAlt = 0,
+  nextNogps = 0,
 }
 
 -- Map alert types to existing EdgeTX system voice files.
@@ -298,6 +303,7 @@ local _alertVoices = {
   failsafe = { custom = "failsafe", system = "fsact" },
   distlmt  = { custom = "distlmt",  system = "warnng" },
   altmax   = { custom = "altmax",   system = "tohigh" },
+  nogpsfix = { custom = "nogpsfix", system = nil },
 }
 
 local function playNamedSound(name)
@@ -348,6 +354,21 @@ local function resetAlertState()
   _alerts.nextLq    = 0
   _alerts.nextDist  = 0
   _alerts.nextAlt   = 0
+  _alerts.nextNogps = 0
+end
+
+local function playNogpsFixBuzzer()
+  -- No system voice exists for this; play a descending triple beep
+  -- and also try the custom WAV in case the user has provided one.
+  if not playAlertVoice("nogpsfix") then
+    if type(playTone) == "function" then
+      pcall(playTone, 1800, 80, 0)
+      pcall(playTone, 1400, 80, 0)
+      pcall(playTone, 1000, 120, 0)
+    end
+  end
+  -- Show the NO GPS overlay for 1 second (100 ticks = 1s)
+  _nogpsOverlayUntil = (getTime() or 0) + 100
 end
 
 local function getCellVoltage(opts)
@@ -421,6 +442,24 @@ local function tickAlerts(opts)
     _alerts.armedPrev = false
     resetAlertState()
     return
+  end
+
+  -- Arm-switch-high but GPS not fixed: alert on rising edge of arm switch
+  do
+    local switchHigh = sourceIsArmed(opts and opts.ArmSrc)
+    local risingEdge = switchHigh and not _alerts.armSwitchPrev
+    if risingEdge and not _lastArmed then
+      local sats = getS(SN_SATS)
+      local noFix = (type(sats) ~= "number") or (sats < 6)
+      if noFix then
+        local due = now >= (_alerts.nextNogps or 0)
+        if due then
+          playNogpsFixBuzzer()
+          _alerts.nextNogps = now + 300  -- 3s cooldown between retries
+        end
+      end
+    end
+    _alerts.armSwitchPrev = switchHigh
   end
 
   if (opts and opts.SndArmd or 0) == 1 then
@@ -791,6 +830,32 @@ local function drawHeaderText(x, y, txt, col)
   local s = string.upper(tostring(txt or ""))
   lcd.drawText(x + 2, y + 2, s, MIDSIZE + BOLD + C_SIL_DK)
   lcd.drawText(x, y, s, MIDSIZE + BOLD + (col or C_WHITE))
+end
+
+local function fitHeaderText(txt, maxW, flags)
+  local s = string.upper(tostring(txt or ""))
+  if s == "" or type(maxW) ~= "number" or maxW <= 0 or not lcd.getTextSize then
+    return s
+  end
+  local w = lcd.getTextSize(s, flags)
+  if type(w) ~= "number" or w <= maxW then return s end
+
+  local ell = "..."
+  local n = string.len(s)
+  while n > 1 do
+    local t = string.sub(s, 1, n) .. ell
+    local tw = lcd.getTextSize(t, flags)
+    if type(tw) == "number" and tw <= maxW then return t end
+    n = n - 1
+  end
+  return ell
+end
+
+local function drawHeaderTextFit(x, y, txt, col, maxW)
+  local flags = SMLSIZE + BOLD
+  local s = fitHeaderText(txt, maxW, flags)
+  lcd.drawText(x + 1, y + 1, s, flags + C_SIL_DK)
+  lcd.drawText(x, y, s, flags + (col or C_WHITE))
 end
 
 local function drawHeaderTextC(x, y, txt, col)
@@ -1257,13 +1322,39 @@ local function tdLQ(o)
            pct=v, col=cLQ(v,o.LQWrn),
            sub=v and string.format("warn<%d%%",o.LQWrn) or nil }
 end
+
+local function inferCellCountFromPack(packV, fullCellV)
+  if type(packV) ~= "number" then return nil end
+  local full = math.max(3.0, math.min(5.0, tonumber(fullCellV) or 4.2))
+  local inferred = math.ceil((packV / full) - 0.0001)
+  return clampInt(inferred, 1, 8)
+end
+
+local function resolveRxCellCount(o, packV)
+  local fullV = (tonumber(o and o.FullV) or 42) / 10.0
+  local cfg = math.floor(tonumber(o and o.Cells) or 0)
+  if cfg >= 1 then
+    if type(packV) == "number" then
+      local perCell = packV / cfg
+      -- If configured cells produce an impossible per-cell voltage,
+      -- auto-correct from pack voltage to avoid wrong 100% readings.
+      if perCell > (fullV + 0.25) or perCell < 2.5 then
+        return inferCellCountFromPack(packV, fullV) or cfg
+      end
+    end
+    return cfg
+  end
+  return inferCellCountFromPack(packV, fullV) or 1
+end
+
 local function tdBatt(o)
-  local volt=getS(SN_VOLT); local nc=o.Cells
+  local volt=getS(SN_VOLT)
+  local nc=resolveRxCellCount(o, volt)
   local fV=o.FullV/10.0; local eV=3.30
   local cV=volt and (volt/nc) or nil
   local pct=cV and math.max(0,math.min(100,(cV-eV)/(fV-eV)*100)) or nil
   return { val=volt and string.format("%.1fV",volt) or "---",
-           unit=cV and string.format("%.2f/cell",cV) or "",
+           unit=cV and string.format("%.2f/cell  %dS",cV,nc) or "",
            pct=pct, col=cPct(pct),
            sub=pct and string.format("%d%%",math.floor(pct)) or nil }
 end
@@ -1300,7 +1391,8 @@ local function tdRSSI(o)
            col=col, sub=v2 and string.format("a2:%d",v2) or nil }
 end
 local function tdCellV(o)
-  local volt=getS(SN_VOLT); local nc=o.Cells
+  local volt=getS(SN_VOLT)
+  local nc=resolveRxCellCount(o, volt)
   local wV=o.WarnV/10.0; local kV=o.CritV/10.0
   local cV=volt and (volt/nc) or nil
   return { val=cV and string.format("%.2f",cV) or "---",
@@ -1711,8 +1803,8 @@ local function drawHeader(o)
     local info = model.getInfo()
     if info and info.name and info.name ~= "" then mname = info.name end
   end
-  -- model name (safe x=80 avoids EdgeTX logo, y=12 centers in 82px bar)
-  drawHeaderText(80, 10, mname, C_SIL_HI)
+  -- Model name in compact font with width clamp so it never overlaps FM area.
+  drawHeaderTextFit(80, 12, mname, C_SIL_HI, 210)
   -- vertical separators (symmetric around x=400)
   lcd.drawFilledRectangle(300, 8, 2, 58, C_SIL_LO)
   -- flight mode
@@ -1772,11 +1864,13 @@ local function pctFromTxVoltage(v)
   return math.max(0, math.min(100, p))
 end
 
-local function pctFromRxCellVoltage(v, cells)
+local function pctFromRxCellVoltage(v, o)
   if type(v) ~= "number" then return nil end
-  local nc = math.max(1, math.floor(tonumber(cells) or 1))
+  local nc = resolveRxCellCount(o, v)
   local cv = v / nc
-  local p = (cv - 3.9) / (4.2 - 3.9) * 100
+  local full = (tonumber(o and o.FullV) or 42) / 10.0
+  local empty = 3.30
+  local p = (cv - empty) / (full - empty) * 100
   return math.max(0, math.min(100, p))
 end
 
@@ -1836,7 +1930,7 @@ local function drawSideBatteryBars(o)
   local txPct = pctFromTxVoltage(txv)
 
   local rxv = getS(SN_VOLT)
-  local rxPct = pctFromRxCellVoltage(rxv, o and o.Cells)
+  local rxPct = pctFromRxCellVoltage(rxv, o)
 
   drawSideBar(railPadX, y, railW, h, rxPct, "RX batt")
   drawSideBar(800 - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
@@ -1866,6 +1960,7 @@ local function create(zone, options)
   _lastThrUp = false
   _alerts.lastRun = 0
   _alerts.armedPrev = false
+  _nogpsOverlayUntil = 0
   resetAlertState()
   syncTileSlotsFromOptions(options)
   local loaded = loadTileSlotsFromStorage(options)
@@ -1914,6 +2009,14 @@ local function refresh(widget, event, touchState)
     syncTileSlotsFromOptions(widget.options)
   end
   handleTouch(widget, touchState)
+
+  -- Handle RTN button to dismiss the menu
+  if event == EVT_VIRTUAL_EXIT and _touchUi.open then
+    _touchUi.open = false
+    _touchUi.tile = nil
+    _touchUi.ignoreDismissUntil = 0
+  end
+
   tickArmTimer(widget.options)
   tickAlerts(widget.options)
 
@@ -1925,6 +2028,21 @@ local function refresh(widget, event, touchState)
   drawCarbonFrame()
   drawSideBatteryBars(widget.options)
   drawHeader(widget.options)
+
+  -- NO GPS overlay: big red banner, shown for ~1 second after alert fires
+  if (getTime() or 0) < _nogpsOverlayUntil then
+    local msg = "NO GPS"
+    local flags = DBLSIZE + BOLD
+    local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 160, 38
+    local tx = math.floor((800 - (tw or 160)) / 2)
+    local ty = math.floor((480 - (th or 38)) / 2)
+    -- Semi-transparent dark backdrop
+    lcd.drawFilledRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, lcd.RGB(20, 0, 0))
+    lcd.drawRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, C_RED)
+    -- Shadow + text
+    lcd.drawText(tx + 2, ty + 2, msg, flags + lcd.RGB(80, 0, 0))
+    lcd.drawText(tx, ty, msg, flags + C_RED)
+  end
 end
 
 return {
