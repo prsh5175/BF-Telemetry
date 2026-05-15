@@ -55,8 +55,6 @@ Main widget path after copy:
 /WIDGETS/BFTelem/main.lua
 ```
 
-The repository also keeps a secondary prepacked mirror in `sdcard/` for release packaging workflows.
-
 Square theme variant is also included at:
 
 ```
