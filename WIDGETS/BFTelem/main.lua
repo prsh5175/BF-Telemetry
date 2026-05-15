@@ -146,7 +146,6 @@ end
 -- =========================================================================
 local _armStart  = nil
 local _lastArmed = false
-local _fmStr     = ""
 local _lastThrUp = false
 
 -- EdgeTX returns string-type telemetry sensors (like FM) as a byte-array
@@ -638,56 +637,17 @@ local function cBattPct(p)
 end
 
 -- =========================================================================
---  LAYOUT CONSTANTS
---  Screen: 800 x 480
---  Carbon frame sides: 44px L/R, 22px bottom
---  Top bar: flat 22px at edges, ramps to 82px peak over 80px each side
---  Peak zone: x=200..600 (flat 82px high = header info zone)
---  Tile grid: x=44..756, y=84..458
+--  LAYOUT CONSTANTS (Responsive)
+--  Set by initLayoutConstants() based on screen size:
+--  - 800x480: TX16S MK III (6 cols x 2 rows honeycomb)
+--  - 480x272: TX16S MK II / Jumper T16 (4 cols x 2 rows honeycomb)
 -- =========================================================================
-local FRM_L    = 30
-local FRM_R    = 30
-local FRM_B    = 14
-local TOP_EDGE = 22
-local TOP_MID  = 82
-local RAMP_W   = 80
-local PEAK_X1  = 200
-local PEAK_X2  = 600
-local RAMP_X1  = PEAK_X1 - RAMP_W
-local RAMP_X2  = PEAK_X2 + RAMP_W
-
-local GX = FRM_L
-local GY = TOP_MID + 2
-local GW = 800 - FRM_L - FRM_R
-local GH = 480 - TOP_MID - FRM_B
-
--- Honeycomb layout (12 cells = 6 columns x 2 staggered rows)
-local HX_COLS = 6
-local HX_ROWS = 2
-local HX_GAP  = 2
-
-local HEX_W = math.floor((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
-local HEX_H = math.floor(HEX_W * 1.00)
-local _maxHexH = math.floor((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
-if HEX_H > _maxHexH then
-  HEX_H = _maxHexH
-  HEX_W = math.floor(HEX_H / 1.00)
-end
-
-local HX_STEP_X = math.floor(HEX_W * 0.75)
-local HX_STEP_Y = HEX_H
-local HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
-local HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
-local HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
-local HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
-
-local MENU_W = 460
-local MENU_X = math.floor((800 - MENU_W) / 2)
-local MENU_ROW_H = 38
-local MENU_TITLE_H = 28
-local MENU_PAD = 8
-local MENU_MAX_ROWS = 8
-local MENU_SCROLL_THRESHOLD = 10
+-- All layout constants are now globals set by initLayoutConstants():
+-- FRM_L, FRM_R, FRM_B, TOP_EDGE, TOP_MID, RAMP_W, PEAK_X1, PEAK_X2,
+-- RAMP_X1, RAMP_X2, GX, GY, GW, GH,
+-- HX_COLS, HX_ROWS, HX_GAP, HEX_W, HEX_H,
+-- HX_STEP_X, HX_STEP_Y, HX_TOTAL_W, HX_TOTAL_H, HX_ORG_X, HX_ORG_Y,
+-- MENU_W, MENU_X, MENU_ROW_H, MENU_TITLE_H, MENU_PAD, MENU_MAX_ROWS, MENU_SCROLL_THRESHOLD
 
 local _tileSlots = {}
 local _touchUi = {
@@ -703,6 +663,11 @@ local _touchUi = {
   downMoved = false,
   scrollStart = 0,
   menuScroll = 0,
+}
+local _scrollWheelUi = {
+  focusedTile = 1,       -- currently focused tile (1-based)
+  lastRotaryEvent = 0,   -- debounce timer
+  debounceMs = 50,       -- debounce interval in milliseconds (100 ticks = 1 second)
 }
 
 local function clampInt(v, lo, hi)
@@ -1635,6 +1600,64 @@ local function resetTouchDownState()
   _touchUi.scrollStart = _touchUi.menuScroll or 0
 end
 
+local function handleScrollWheel(widget, event)
+  -- Scroll wheel + button navigation for Jumper T16 and TX16S MK II
+  local now = getTime() or 0
+  local debounceElapsed = (now - (_scrollWheelUi.lastRotaryEvent or 0)) * 10  -- convert to ms
+  
+  -- Handle rotary encoder (scroll wheel)
+  if event == EVT_ROT_LEFT or event == EVT_ROT_RIGHT then
+    if debounceElapsed < _scrollWheelUi.debounceMs then
+      return  -- debounce: ignore rapid rotations
+    end
+    _scrollWheelUi.lastRotaryEvent = now
+    
+    if _touchUi.open and _touchUi.tile then
+      -- Menu is open: rotate through metrics
+      local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+      local maxScroll = math.max(0, #METRICS - visibleRows)
+      local direction = (event == EVT_ROT_RIGHT) and 1 or -1
+      _touchUi.menuScroll = clampInt((_touchUi.menuScroll or 0) + direction, 0, maxScroll)
+    else
+      -- Menu closed: rotate through tiles
+      local direction = (event == EVT_ROT_RIGHT) and 1 or -1
+      _scrollWheelUi.focusedTile = clampInt(_scrollWheelUi.focusedTile + direction, 1, #_tileSlots)
+    end
+    return
+  end
+  
+  -- Handle Enter/OK button
+  if event == EVT_VIRTUAL_ENTER then
+    local now = getTime() or 0
+    if _touchUi.open and _touchUi.tile then
+      -- Menu is open: select the current metric from scroll position
+      local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
+      local maxScroll = math.max(0, #METRICS - visibleRows)
+      local scroll = clampInt(_touchUi.menuScroll or 0, 0, maxScroll)
+      local selectedIdx = scroll + 1  -- first visible metric
+      
+      if selectedIdx <= #METRICS then
+        _tileSlots[_touchUi.tile] = selectedIdx
+        if widget and widget.options then
+          widget.options["T" .. _touchUi.tile] = selectedIdx - 1
+        end
+        saveTileSlotsToStorage(widget and widget.options)
+      end
+      _touchUi.open = false
+      _touchUi.tile = nil
+      _touchUi.ignoreDismissUntil = 0
+    else
+      -- Menu closed: open metric picker for focused tile
+      if not canTapNow() then return end
+      _touchUi.open = true
+      _touchUi.tile = _scrollWheelUi.focusedTile
+      _touchUi.menuScroll = 0
+      _touchUi.ignoreDismissUntil = (getTime() or 0) + 12
+    end
+    return
+  end
+end
+
 local function handleTouch(widget, touchState)
   local x, y = touchXY(touchState)
   local isDown = (x ~= nil and y ~= nil)
@@ -1954,6 +1977,32 @@ local function drawGrid(opts)
   end
 end
 
+local function drawScrollWheelFocus()
+  -- Draw focus ring around the focused tile when using scroll wheel (Jumper T16, or TX16S MK II/MK III with wheel)
+  if _scrollWheelUi.focusedTile and not _touchUi.open then
+    local tx, ty, tw, th = tileRect(_scrollWheelUi.focusedTile)
+    -- Draw a bright cyan border to indicate focus
+    local q = math.max(8, math.floor(tw / 4))
+    local hh = math.floor(th / 2)
+    local xL  = tx
+    local xR  = tx + tw - 1
+    local xLT = tx + q
+    local xRT = tx + tw - q - 1
+    local yM  = ty + hh
+    local y1  = ty
+    local y4  = ty + th - 1
+    
+    -- Draw focus outline (bright cyan)
+    local focusCol = C_CYAN
+    lcd.drawLine(xLT, y1,  xRT, y1,  0xFF, focusCol)   -- top
+    lcd.drawLine(xRT, y1,  xR,  yM,  0xFF, focusCol)   -- right-top
+    lcd.drawLine(xR,  yM,  xRT, y4,  0xFF, focusCol)   -- right-bottom
+    lcd.drawLine(xRT, y4,  xLT, y4,  0xFF, focusCol)   -- bottom
+    lcd.drawLine(xLT, y4,  xL,  yM,  0xFF, focusCol)   -- left-bottom
+    lcd.drawLine(xL,  yM,  xLT, y1,  0xFF, focusCol)   -- left-top
+  end
+end
+
 -- =========================================================================
 --  LIFECYCLE
 -- =========================================================================
@@ -1984,11 +2033,14 @@ local function create(zone, options)
   _touchUi.downMoved = false
   _touchUi.scrollStart = 0
   _touchUi.menuScroll = 0
+  _scrollWheelUi.focusedTile = 1
+  _scrollWheelUi.lastRotaryEvent = 0
+  _deviceType = detectDeviceType(options)
   return { zone = zone, options = options }
 end
 local function update(widget, options)
   widget.options = options
-
+  initLayoutConstants()
   -- Some radios provide all-zero tile options after reboot; if we detect that
   -- shape, restore persisted tiles/mode before syncing back into runtime state.
   if optionsAllLinkQ(options) then
@@ -1997,23 +2049,35 @@ local function update(widget, options)
       setSequentialTileDefaults(options)
     end
   end
-
   initColors(options and options.Theme)
   syncTileSlotsFromOptions(options)
   saveTileSlotsToStorage(options)
-end
-local function background(widget)
-  tickArmTimer(widget.options)
-  tickAlerts(widget.options)
+  _deviceType = detectDeviceType(options)
 end
 
 local function refresh(widget, event, touchState)
   _gaugeBgBuildBudget = 2
+  initLayoutConstants()
   initColors(widget.options and widget.options.Theme)
   if #_tileSlots ~= #METRICS then
     syncTileSlotsFromOptions(widget.options)
   end
-  handleTouch(widget, touchState)
+
+  -- Input handling: Touch for TX16S MK II, scroll wheel for Jumper T16
+  if _is480x272 then
+    if _deviceType == "TX16S_MK2" then
+      handleTouch(widget, touchState)
+      -- Also support scroll wheel as alternative on TX16S MK II
+      handleScrollWheel(widget, event)
+    else
+      -- Jumper T16: scroll wheel + button only (no touchscreen)
+      handleScrollWheel(widget, event)
+    end
+  else
+    -- TX16S MK III: touch primary, scroll wheel as alternative
+    handleTouch(widget, touchState)
+    handleScrollWheel(widget, event)
+  end
 
   -- Handle RTN button to dismiss the menu
   if event == EVT_VIRTUAL_EXIT and _touchUi.open then
@@ -2026,9 +2090,10 @@ local function refresh(widget, event, touchState)
   tickAlerts(widget.options)
 
   -- Draw order: pit/grid first, then menu overlay, frame/rails, then header text.
-  lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
+  lcd.drawFilledRectangle(0, 0, _screenW, _screenH, C_BG)
   drawPit()
   drawGrid(widget.options)
+  drawScrollWheelFocus()
   drawMetricMenu()
   drawCarbonFrame()
   drawSideBatteryBars(widget.options)
@@ -2038,12 +2103,12 @@ local function refresh(widget, event, touchState)
   if (getTime() or 0) < _nogpsOverlayUntil then
     local msg = "NO GPS"
     local flags = DBLSIZE + BOLD
-    local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 160, 38
-    local tx = math.floor((800 - (tw or 160)) / 2)
-    local ty = math.floor((480 - (th or 38)) / 2)
+    local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 120, 28
+    local tx = math.floor((_screenW - (tw or 120)) / 2)
+    local ty = math.floor((_screenH - (th or 28)) / 2)
     -- Semi-transparent dark backdrop
-    lcd.drawFilledRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, lcd.RGB(20, 0, 0))
-    lcd.drawRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, C_RED)
+    lcd.drawFilledRectangle(tx - 14, ty - 10, (tw or 120) + 28, (th or 28) + 20, lcd.RGB(20, 0, 0))
+    lcd.drawRectangle(tx - 14, ty - 10, (tw or 120) + 28, (th or 28) + 20, C_RED)
     -- Shadow + text
     lcd.drawText(tx + 2, ty + 2, msg, flags + lcd.RGB(80, 0, 0))
     lcd.drawText(tx, ty, msg, flags + C_RED)
