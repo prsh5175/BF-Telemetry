@@ -1,7 +1,7 @@
 -- BF Telemetry Widget (default Hex Honeycomb theme)
--- EdgeTX 2.12+, Lua 5.3, TX16S MK III 800x480.
+-- EdgeTX 2.12+, Lua 5.3, TX16S MK III (800x480) and TX15 Max (480x320).
 -- Current UI details: flat hex borders (no bevel split), side battery rails,
--- and a time-of-day clock in the top-right pit gap.
+-- and a time-of-day clock in the top-right pit gap. Responsive layout.
 
 local OPTIONS = {
   { "Cells",   VALUE, 0, 0, 8 },
@@ -638,56 +638,92 @@ local function cBattPct(p)
 end
 
 -- =========================================================================
---  LAYOUT CONSTANTS
---  Screen: 800 x 480
---  Carbon frame sides: 44px L/R, 22px bottom
---  Top bar: flat 22px at edges, ramps to 82px peak over 80px each side
---  Peak zone: x=200..600 (flat 82px high = header info zone)
---  Tile grid: x=44..756, y=84..458
+--  LAYOUT CONSTANTS (Responsive to Screen Size)
+--  Supports: TX16S MK III (800x480) and TX15 Max (480x320)
 -- =========================================================================
-local FRM_L    = 30
-local FRM_R    = 30
-local FRM_B    = 14
-local TOP_EDGE = 22
-local TOP_MID  = 82
-local RAMP_W   = 80
-local PEAK_X1  = 200
-local PEAK_X2  = 600
-local RAMP_X1  = PEAK_X1 - RAMP_W
-local RAMP_X2  = PEAK_X2 + RAMP_W
+local SCREEN_W, SCREEN_H = 800, 480  -- Defaults; will be updated at create()
+local FRM_L, FRM_R, FRM_B
+local TOP_EDGE, TOP_MID, RAMP_W, PEAK_X1, PEAK_X2, RAMP_X1, RAMP_X2
+local GX, GY, GW, GH
+local HX_COLS, HX_ROWS, HX_GAP
+local HEX_W, HEX_H, HX_STEP_X, HX_STEP_Y, HX_TOTAL_W, HX_TOTAL_H, HX_ORG_X, HX_ORG_Y
+local MENU_W, MENU_X, MENU_ROW_H, MENU_TITLE_H, MENU_PAD, MENU_MAX_ROWS, MENU_SCROLL_THRESHOLD
 
-local GX = FRM_L
-local GY = TOP_MID + 2
-local GW = 800 - FRM_L - FRM_R
-local GH = 480 - TOP_MID - FRM_B
+local function initLayoutConstants()
+  -- Detect actual screen size
+  if lcd.getSize then
+    SCREEN_W, SCREEN_H = lcd.getSize()
+  else
+    SCREEN_W, SCREEN_H = 800, 480
+  end
 
--- Honeycomb layout (12 cells = 6 columns x 2 staggered rows)
-local HX_COLS = 6
-local HX_ROWS = 2
-local HX_GAP  = 2
+  -- Scale frame based on screen size
+  if SCREEN_W <= 480 then
+    -- TX15 Max (480x320) - smaller frame
+    FRM_L    = 16
+    FRM_R    = 16
+    FRM_B    = 8
+    TOP_EDGE = 12
+    TOP_MID  = 48
+    RAMP_W   = 40
+  else
+    -- TX16S MK III (800x480) - default frame
+    FRM_L    = 30
+    FRM_R    = 30
+    FRM_B    = 14
+    TOP_EDGE = 22
+    TOP_MID  = 82
+    RAMP_W   = 80
+  end
 
-local HEX_W = math.floor((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
-local HEX_H = math.floor(HEX_W * 1.00)
-local _maxHexH = math.floor((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
-if HEX_H > _maxHexH then
-  HEX_H = _maxHexH
-  HEX_W = math.floor(HEX_H / 1.00)
+  -- Center peak zone
+  PEAK_X1 = math.floor(SCREEN_W * 0.25)
+  PEAK_X2 = math.floor(SCREEN_W * 0.75)
+  RAMP_X1 = PEAK_X1 - RAMP_W
+  RAMP_X2 = PEAK_X2 + RAMP_W
+
+  -- Grid area
+  GX = FRM_L
+  GY = TOP_MID + 2
+  GW = SCREEN_W - FRM_L - FRM_R
+  GH = SCREEN_H - TOP_MID - FRM_B
+
+  -- Honeycomb grid: 6 cols x 2 rows for 800x480, 4 cols x 3 rows for 480x320
+  if SCREEN_W <= 480 then
+    HX_COLS = 4
+    HX_ROWS = 3
+  else
+    HX_COLS = 6
+    HX_ROWS = 2
+  end
+  HX_GAP = 2
+
+  -- Calculate hex tile size
+  HEX_W = math.floor((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
+  HEX_H = math.floor(HEX_W * 1.00)
+  local _maxHexH = math.floor((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
+  if HEX_H > _maxHexH then
+    HEX_H = _maxHexH
+    HEX_W = math.floor(HEX_H / 1.00)
+  end
+
+  -- Hex positioning
+  HX_STEP_X = math.floor(HEX_W * 0.75)
+  HX_STEP_Y = HEX_H
+  HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
+  HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
+  HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
+  HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
+
+  -- Menu sizing
+  MENU_W = math.floor(SCREEN_W * 0.575)  -- Scale proportionally
+  MENU_X = math.floor((SCREEN_W - MENU_W) / 2)
+  MENU_ROW_H = 38
+  MENU_TITLE_H = 28
+  MENU_PAD = 8
+  MENU_MAX_ROWS = 8
+  MENU_SCROLL_THRESHOLD = 10
 end
-
-local HX_STEP_X = math.floor(HEX_W * 0.75)
-local HX_STEP_Y = HEX_H
-local HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
-local HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
-local HX_ORG_X = GX + math.floor((GW - HX_TOTAL_W) / 2)
-local HX_ORG_Y = GY + math.floor((GH - HX_TOTAL_H) / 2)
-
-local MENU_W = 460
-local MENU_X = math.floor((800 - MENU_W) / 2)
-local MENU_ROW_H = 38
-local MENU_TITLE_H = 28
-local MENU_PAD = 8
-local MENU_MAX_ROWS = 8
-local MENU_SCROLL_THRESHOLD = 10
 
 local _tileSlots = {}
 local _touchUi = {
@@ -720,43 +756,44 @@ local function drawCarbonFrame()
   local cfD = C_CF1   -- solid dark carbon fill color
 
   -- ---- Flat frame panels ----
-  lcd.drawFilledRectangle(0, 0, 800, TOP_MID, cfD)
-  lcd.drawFilledRectangle(0, TOP_MID, FRM_L, 480 - TOP_MID - FRM_B, cfD)
-  lcd.drawFilledRectangle(800 - FRM_R, TOP_MID, FRM_R, 480 - TOP_MID - FRM_B, cfD)
-  lcd.drawFilledRectangle(0, 480 - FRM_B, 800, FRM_B, cfD)
+  lcd.drawFilledRectangle(0, 0, SCREEN_W, TOP_MID, cfD)
+  lcd.drawFilledRectangle(0, TOP_MID, FRM_L, SCREEN_H - TOP_MID - FRM_B, cfD)
+  lcd.drawFilledRectangle(SCREEN_W - FRM_R, TOP_MID, FRM_R, SCREEN_H - TOP_MID - FRM_B, cfD)
+  lcd.drawFilledRectangle(0, SCREEN_H - FRM_B, SCREEN_W, FRM_B, cfD)
 
   -- ---- Inner edge bevel (bottom edge of flat top bar) ----
-  lcd.drawFilledRectangle(0, TOP_MID,   800, 1, C_SIL_HI)
-  lcd.drawFilledRectangle(0, TOP_MID+1, 800, 1, C_SIL_MID)
+  lcd.drawFilledRectangle(0, TOP_MID,   SCREEN_W, 1, C_SIL_HI)
+  lcd.drawFilledRectangle(0, TOP_MID+1, SCREEN_W, 1, C_SIL_MID)
 
   -- cyan accent line across full bottom of top bar
-  lcd.drawFilledRectangle(0, TOP_MID + 2, 800, 2, C_CYAN)
+  lcd.drawFilledRectangle(0, TOP_MID + 2, SCREEN_W, 2, C_CYAN)
 
   -- left/right frame inner edge bevels
   lcd.drawFilledRectangle(FRM_L,   GY, 1, GH, C_SIL_HI)
   lcd.drawFilledRectangle(FRM_L+1, GY, 1, GH, C_SIL_MID)
-  lcd.drawFilledRectangle(800-FRM_R-2, GY, 1, GH, C_SIL_MID)
-  lcd.drawFilledRectangle(800-FRM_R-1, GY, 1, GH, C_SIL_HI)
+  lcd.drawFilledRectangle(SCREEN_W-FRM_R-2, GY, 1, GH, C_SIL_MID)
+  lcd.drawFilledRectangle(SCREEN_W-FRM_R-1, GY, 1, GH, C_SIL_HI)
 
   -- bottom frame top edge bevel
-  lcd.drawFilledRectangle(GX, 480-FRM_B-2, GW, 1, C_SIL_MID)
-  lcd.drawFilledRectangle(GX, 480-FRM_B-1, GW, 1, C_SIL_HI)
+  lcd.drawFilledRectangle(GX, SCREEN_H-FRM_B-2, GW, 1, C_SIL_MID)
+  lcd.drawFilledRectangle(GX, SCREEN_H-FRM_B-1, GW, 1, C_SIL_HI)
 
   -- outer silver border
-  lcd.drawFilledRectangle(0,   0, 800,   1, C_SIL_MID)
-  lcd.drawFilledRectangle(0,   0,   1, 480, C_SIL_MID)
-  lcd.drawFilledRectangle(799, 0,   1, 480, C_SIL_MID)
-  lcd.drawFilledRectangle(0, 479, 800,   1, C_SIL_MID)
+  lcd.drawFilledRectangle(0,   0, SCREEN_W,   1, C_SIL_MID)
+  lcd.drawFilledRectangle(0,   0,   1, SCREEN_H, C_SIL_MID)
+  lcd.drawFilledRectangle(SCREEN_W-1, 0,   1, SCREEN_H, C_SIL_MID)
+  lcd.drawFilledRectangle(0, SCREEN_H-1, SCREEN_W,   1, C_SIL_MID)
 
   -- cyan corner L-brackets
-  lcd.drawFilledRectangle(  0,   0,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(  0,   0,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(782,   0,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(798,   0,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(  0, 462,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(  0, 462,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(782, 462,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(798, 462,   2,  18, C_CYAN)
+  local cornerSize = SCREEN_W <= 480 and 10 or 18
+  lcd.drawFilledRectangle(  0,   0,  cornerSize,   2, C_CYAN)
+  lcd.drawFilledRectangle(  0,   0,   2,  cornerSize, C_CYAN)
+  lcd.drawFilledRectangle(SCREEN_W-cornerSize,   0,  cornerSize,   2, C_CYAN)
+  lcd.drawFilledRectangle(SCREEN_W-2,   0,   2,  cornerSize, C_CYAN)
+  lcd.drawFilledRectangle(  0, SCREEN_H-cornerSize,  cornerSize,   2, C_CYAN)
+  lcd.drawFilledRectangle(  0, SCREEN_H-cornerSize,   2,  cornerSize, C_CYAN)
+  lcd.drawFilledRectangle(SCREEN_W-cornerSize, SCREEN_H-cornerSize,  cornerSize,   2, C_CYAN)
+  lcd.drawFilledRectangle(SCREEN_W-2, SCREEN_H-cornerSize,   2,  cornerSize, C_CYAN)
 end
 
 -- =========================================================================
@@ -1804,10 +1841,18 @@ local function drawHeader(o)
     local info = model.getInfo()
     if info and info.name and info.name ~= "" then mname = info.name end
   end
-  -- Model name in compact font with width clamp so it never overlaps FM area.
-  drawHeaderTextFit(80, 12, mname, C_SIL_HI, 210)
-  -- vertical separators (symmetric around x=400)
-  lcd.drawFilledRectangle(300, 8, 2, 58, C_SIL_LO)
+  
+  -- Responsive header layout
+  local nameFitW = SCREEN_W <= 480 and 100 or 210
+  local modelX = SCREEN_W <= 480 and 40 or 80
+  drawHeaderTextFit(modelX, 12, mname, C_SIL_HI, nameFitW)
+  
+  -- Vertical separators (symmetric around center)
+  local sep1X = math.floor(SCREEN_W * 0.375)
+  local sep2X = math.floor(SCREEN_W * 0.625)
+  local fmX = math.floor(SCREEN_W * 0.5)
+  
+  lcd.drawFilledRectangle(sep1X, 8, 2, 58, C_SIL_LO)
   -- flight mode
   local fmDisp = "MODE"
   if hasActiveTelemetry() then
@@ -1817,30 +1862,34 @@ local function drawHeader(o)
   if hasActiveTelemetry() then
     fmCol = _lastArmed and C_ORANGE or C_SIL_HI
   end
-  drawHeaderTextC(400, 10, fmDisp, fmCol)
-  -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)
-  lcd.drawFilledRectangle(500, 8, 2, 58, C_SIL_LO)
+  drawHeaderTextC(fmX, 10, fmDisp, fmCol)
+  -- armed/disarmed indicator
+  lcd.drawFilledRectangle(sep2X, 8, 2, 58, C_SIL_LO)
+  local armX = sep2X + 20
   if _nogpsOverlayUntil and (getTime() or 0) < _nogpsOverlayUntil then
     local s = "NO GPS"
-    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
-    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_RED)
+    lcd.drawText(armX + 2, 12, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(armX, 10, s, SMLSIZE + BOLD + C_RED)
   elseif _lastArmed then
-    drawHeaderText(530, 10, "ARMED", C_RED)
+    drawHeaderText(armX, 10, "ARMED", C_RED)
   else
     local s = "DISARMED"
-    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
-    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_GREEN)
+    lcd.drawText(armX + 2, 12, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(armX, 10, s, SMLSIZE + BOLD + C_GREEN)
   end
+  
   -- TX voltage top-right
   local txv = getValue("tx-voltage")
   if type(txv) == "number" and txv > 0 then
-    lcd.drawText(785, 8, string.format("TX %.1fV", txv),
+    local txX = SCREEN_W - 10
+    lcd.drawText(txX, 8, string.format("TX %.1fV", txv),
       SMLSIZE+RIGHT+(txv > 7.0 and C_GREEN or C_RED))
   end
-  -- screen type label bottom-right
+  
+  -- Screen type label bottom-right
   local st = getScreenType(o)
   local mLbl = (st==1) and "SCR: BAR" or (st==2) and "SCR: GAUGE" or "SCR: NUM"
-  lcd.drawText(785, 56, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
+  lcd.drawText(SCREEN_W - 10, TOP_MID - 20, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
 
   -- Clock in the top-right pit gap (outside the top-right hex tile).
   if getDateTime then
@@ -1928,7 +1977,7 @@ local function drawSideBatteryBars(o)
   if railW < 12 then return end
 
   local y = TOP_MID + 16
-  local h = 480 - TOP_MID - FRM_B - 34
+  local h = SCREEN_H - TOP_MID - FRM_B - 34
   if h < 80 then return end
 
   local txv = getValue("tx-voltage")
@@ -1938,7 +1987,7 @@ local function drawSideBatteryBars(o)
   local rxPct = pctFromRxCellVoltage(rxv, o)
 
   drawSideBar(railPadX, y, railW, h, rxPct, "RX batt")
-  drawSideBar(800 - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
+  drawSideBar(SCREEN_W - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
 end
 
 -- =========================================================================
@@ -1958,6 +2007,7 @@ end
 --  LIFECYCLE
 -- =========================================================================
 local function create(zone, options)
+  initLayoutConstants()  -- Initialize responsive layout based on actual screen size
   initColors(options and options.Theme)
   _sid = {}
   _armStart = nil
@@ -1987,6 +2037,7 @@ local function create(zone, options)
   return { zone = zone, options = options }
 end
 local function update(widget, options)
+  initLayoutConstants()  -- Reinitialize in case screen size changed
   widget.options = options
 
   -- Some radios provide all-zero tile options after reboot; if we detect that
@@ -2008,6 +2059,7 @@ local function background(widget)
 end
 
 local function refresh(widget, event, touchState)
+  initLayoutConstants()  -- Reinitialize layout in case screen size changed
   _gaugeBgBuildBudget = 2
   initColors(widget.options and widget.options.Theme)
   if #_tileSlots ~= #METRICS then
@@ -2026,7 +2078,7 @@ local function refresh(widget, event, touchState)
   tickAlerts(widget.options)
 
   -- Draw order: pit/grid first, then menu overlay, frame/rails, then header text.
-  lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
+  lcd.drawFilledRectangle(0, 0, SCREEN_W, SCREEN_H, C_BG)
   drawPit()
   drawGrid(widget.options)
   drawMetricMenu()
@@ -2039,8 +2091,8 @@ local function refresh(widget, event, touchState)
     local msg = "NO GPS"
     local flags = DBLSIZE + BOLD
     local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 160, 38
-    local tx = math.floor((800 - (tw or 160)) / 2)
-    local ty = math.floor((480 - (th or 38)) / 2)
+    local tx = math.floor((SCREEN_W - (tw or 160)) / 2)
+    local ty = math.floor((SCREEN_H - (th or 38)) / 2)
     -- Semi-transparent dark backdrop
     lcd.drawFilledRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, lcd.RGB(20, 0, 0))
     lcd.drawRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, C_RED)
@@ -2073,7 +2125,6 @@ local function drawGpsStatus()
     lcd.drawText(x, y, "NO GPS LOCK", SMLSIZE + C_RED)
   end
 end
-
 return {
   name       = "BF Telemetry",
   options    = OPTIONS,
