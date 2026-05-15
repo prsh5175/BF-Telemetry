@@ -288,26 +288,37 @@ def reload_lua():
         L = make_layout(parse_lua(LUA_PATH))
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
-F_LBL = F_SML = F_MID = F_DBL = None
+F_LBL = F_SML = F_SML_B = F_BAR_VAL = F_NUM_VAL = F_GAUGE_VAL = F_MID = F_MID_B = F_DBL = F_DBL_B = F_HDR = None
 
 def init_fonts():
-    global F_LBL, F_SML, F_MID, F_DBL
-    # Futuristic + bold font preferences; falls back to system fonts
-    _pref = ["Sprintura", "Orbitron", "Space Mono", "JetBrains Mono", 
-             "IBM Plex Mono", "Roboto Mono", "Ubuntu Mono", "Cascadia Mono", 
-             "Cascadia Code", "Share Tech Mono", "OCR A Extended", 
-             "Lucida Console", "Consolas", "Courier New"]
+    global F_LBL, F_SML, F_SML_B, F_BAR_VAL, F_NUM_VAL, F_GAUGE_VAL, F_MID, F_MID_B, F_DBL, F_DBL_B, F_HDR
+    # Match EdgeTX font rendering: crisp proportional UI fonts.
+    _pref = ["Arial", "Helvetica", "Roboto", "Liberation Sans", 
+             "DejaVu Sans", "Noto Sans", "Ubuntu", "Segoe UI",
+             "Lucida Grande", "Tahoma", "Verdana"]
     def _font(size, bold=False):
         for name in _pref:
             path = pygame.font.match_font(name, bold=bold)
             if path:
                 try:    return pygame.font.Font(path, size)
                 except: pass
-        return pygame.font.SysFont("consolas", size, bold=bold)
-    F_LBL = _font(12)
+        return pygame.font.SysFont("arial", size, bold=bold)
+    # Tuned to better match on-radio visual scale.
+    # Slightly larger for improved screenshot readability.
+    F_LBL = _font(13)
     F_SML = _font(13)
-    F_MID = _font(20, bold=True)
-    F_DBL = _font(28, bold=True)
+    F_SML_B = _font(13, bold=True)
+    # BAR mode value text: 2x current size for stronger visibility in screenshots.
+    F_BAR_VAL = _font(28, bold=True)
+    # NUM and GAUGE value text: 1.5x current midsize values.
+    F_NUM_VAL = _font(30, bold=True)
+    F_GAUGE_VAL = _font(30, bold=True)
+    F_MID = _font(20)
+    F_MID_B = _font(20, bold=True)
+    F_DBL = _font(26)
+    F_DBL_B = _font(26, bold=True)
+    # Header labels (AIR65 / ANGLE / ARMED): bold and 2x previous header size.
+    F_HDR = _font(40, bold=True)
 
 # ── Draw primitives ───────────────────────────────────────────────────────────
 def fr(surf, x, y, w, h, c):
@@ -315,16 +326,17 @@ def fr(surf, x, y, w, h, c):
         pygame.draw.rect(surf, c, (x, y, w, h))
 
 def tx(surf, s, x, y, c, font, align="left"):
-    img = font.render(str(s), True, c)
+    # Disable antialiasing for a crisper, bitmap-like radio appearance.
+    img = font.render(str(s), False, c)
     if align == "right":   x -= img.get_width()
     elif align == "center": x -= img.get_width() // 2
     surf.blit(img, (x, y))
 
 def tx_header(surf, s, x, y, c, align="left"):
     t = str(s).upper()
-    # Header text: always bold MIDSIZE for consistency
-    tx(surf, t, x + 2, y + 2, L['C_SIL_DK'], F_MID, align=align)
-    tx(surf, t, x, y, c, F_MID, align=align)
+    # Header text: dedicated oversized bold font for screenshot readability.
+    tx(surf, t, x + 2, y + 2, L['C_SIL_DK'], F_HDR, align=align)
+    tx(surf, t, x, y, c, F_HDR, align=align)
 
 # ── Scan lines overlay ───────────────────────────────────────────────────────
 _sl_surf = None   # lazily created, reused every frame
@@ -758,7 +770,7 @@ def draw_gauge(surf, X, Y, TW, TH, pct, c, label_s, val_s, unit_s):
         s = F_SML.render(label_s, True, L['C_CYAN'])
         surf.blit(s, (cx - s.get_width() // 2, label_y))
     if val_s:
-        s = F_MID.render(val_s, True, c)
+        s = F_GAUGE_VAL.render(val_s, True, c)
         surf.blit(s, (cx - s.get_width() // 2, val_y))
     if unit_s:
         s = F_SML.render(unit_s, True, L['C_DIM'])
@@ -800,7 +812,7 @@ def render_tile(surf, X, Y, TW, TH, label, d, mode):
             if bar_top < val_y + 10:
                 bar_top = val_y + 10
             draw_bar(surf, X + pad, bar_top, TW - 2*pad, bar_h, pct, c)
-            tx(surf, val_s, cx, val_y, c, F_SML, align="center")
+            tx(surf, val_s, cx, val_y, c, F_BAR_VAL, align="center")
             if unit_s:
                 tx(surf, unit_s, cx, unit_y, L['C_DIM'], F_SML, align="center")
         elif mode == 2:
@@ -808,7 +820,7 @@ def render_tile(surf, X, Y, TW, TH, label, d, mode):
             draw_gauge(surf, X + pad, Y + 6, TW - 2*pad, TH - 14, pct, c, label, val_s, unit_s)
         else:
             tx(surf, label, cx, y_lbl, L['C_CYAN'], F_SML, align="center")
-            tx(surf, val_s, cx, y_val, c, F_MID, align="center")
+            tx(surf, val_s, cx, y_val, c, F_NUM_VAL, align="center")
             if unit_s:
                 tx(surf, unit_s, cx, y_unit, L['C_DIM'], F_SML, align="center")
             if sub_s:
@@ -817,11 +829,11 @@ def render_tile(surf, X, Y, TW, TH, label, d, mode):
         tx(surf, label, X+6, Y+L['TY_LBL'], L['C_CYAN'], F_LBL)
         if mode == 1:
             draw_bar(surf, X, Y, TW, TH, pct, c)
-            tx(surf, val_s, X+6, Y+L['TY_LBL']+14, c, F_SML)
+            tx(surf, val_s, X+6, Y+L['TY_LBL']+14, c, F_BAR_VAL)
         elif mode == 2:
             draw_gauge(surf, X, Y, TW, TH, pct, c, val_s, unit_s)
         else:
-            tx(surf, val_s,  X+6, Y+L['TY_VAL'],  c,        F_MID)
+            tx(surf, val_s,  X+6, Y+L['TY_VAL'],  c,        F_NUM_VAL)
             tx(surf, unit_s, X+6, Y+L['TY_UNIT'], L['C_DIM'], F_SML)
             if sub_s:
                 tx(surf, sub_s, X+6, Y+L['TY_SUB'], L['C_DIM'], F_SML)
@@ -1008,11 +1020,12 @@ class LuaWidgetBridge:
 
     def _font_from_flags(self, flags):
         f = int(flags or 0)
+        is_bold = bool(f & self.FLAG_BOLD)
         if f & self.SIZE_DBL:
-            return F_DBL
+            return F_DBL_B if is_bold else F_DBL
         if f & self.SIZE_MID:
-            return F_MID
-        return F_SML
+            return F_MID_B if is_bold else F_MID
+        return F_SML_B if is_bold else F_SML
 
     def _text_align(self, flags):
         f = int(flags or 0)

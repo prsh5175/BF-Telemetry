@@ -386,9 +386,13 @@ python dist/take_screenshots.py
 
 Output is saved to `assets/screenshots/`.
 
+Screenshot font mapping follows the Lua widget flags used in `main.lua` (`SMLSIZE`, `MIDSIZE`, `DBLSIZE`, and `BOLD`) so text weight/scale in emulator captures is aligned with the radio UI.
+
 ---
 
 ## Screenshots
+
+These are the latest regenerated emulator captures, including the updated font sizing pass (larger header text across modes, larger BAR numeric values, and enlarged NUM/GAUGE value text).
 
 ### Numeric Mode
 Large value readout with label and unit. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
