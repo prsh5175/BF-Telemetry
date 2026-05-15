@@ -50,6 +50,40 @@ To also include optional extras in the same one-step command:
 ./install-to-sd.sh --sd /Volumes/EDGETX --yes --with-sounds --with-scripts
 ```
 
+### Safe Installation (Windows) 🆕
+
+**Windows users without bash:** Use **File Explorer** (safe, no file deletion):
+
+1. **Connect your SD card** to your Windows PC (via USB card reader or built-in SD slot)
+2. **Extract the repository** (right-click → Extract All)
+3. **In File Explorer**, navigate to the extracted folder and open the `WIDGETS` folder
+4. **Drag `BFTelem`** folder into your SD card's `WIDGETS` folder
+   - If prompted "Replace folder?" → click **Skip** (keeps existing files intact)
+   - If prompted "Merge?" → click **Yes**
+5. *(Optional)* Repeat step 4 with `SOUNDS` folder if you want custom voice overrides
+
+**Result:** `[SD Card]\WIDGETS\BFTelem\main.lua` is now on your radio.
+
+#### Command-line alternative (Windows PowerShell)
+
+If you prefer the command line:
+
+```powershell
+# Navigate to extracted BF-Telemetry folder
+cd C:\Users\YourName\Downloads\BF-Telemetry
+
+# Copy only the widget (recommended)
+robocopy WIDGETS E:\WIDGETS /E /NFL /NDL /NJH /NJS
+```
+
+Replace `E:` with your SD card's actual drive letter. The `/NFL` and similar flags suppress verbose output.
+
+To also include sounds:
+```powershell
+robocopy WIDGETS E:\WIDGETS /E /NFL /NDL /NJH /NJS
+robocopy SOUNDS E:\SOUNDS /E /NFL /NDL /NJH /NJS
+```
+
 ### Recommended (Like Other Telemetry Widgets)
 
 Copy only the widget folder:
@@ -64,8 +98,8 @@ This is the same low-risk pattern used by most telemetry widgets (copy one scrip
 
 ### Alternate (Drag-and-Drop Repo Top-Level Folders)
 
-**⚠️ macOS Users: See the Safe Installation section above first.**
-Dragging top-level SOUNDS/WIDGETS folders onto your SD card root in Finder may show a replace-style prompt. Prefer copying only `WIDGETS/BFTelem` (recommended above), or use `install-to-sd.sh` for safe merge behavior.
+**⚠️ macOS/Windows Users: See the Safe Installation sections above first.**
+Dragging top-level SOUNDS/WIDGETS folders onto your SD card root may show replace/merge prompts. Prefer copying only `WIDGETS/BFTelem` (recommended above), or use the safe install methods for merge behavior.
 
 This repository now includes top-level EdgeTX SD folders:
 
