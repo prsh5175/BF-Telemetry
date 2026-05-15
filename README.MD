@@ -17,6 +17,82 @@ An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, des
 
 ## Installation
 
+### Safe Installation (macOS Recommended) 🆕
+
+If you're on **macOS** and have other Lua scripts on your SD card (Yaapu, iNav, etc.), use the included safe installer script to merge files without deleting anything:
+
+```bash
+cd /path/to/BF-Telemetry
+./install-to-sd.sh
+```
+
+The script will:
+1. Ask you to select your SD card mount path
+2. Safely merge files using `rsync` (no deletes, only updates)
+3. Preserve all existing scripts (Yaapu, iNav, custom Lua, etc.)
+4. Show a summary before confirming
+
+This is the **safest method** and fully automated. No need for Finder drag-and-drop.
+
+#### One-step command mode (no prompts)
+
+If you already know your SD mount path, run one command:
+
+```bash
+./install-to-sd.sh --sd /Volumes/EDGETX --yes
+```
+
+That installs only `WIDGETS/BFTelem` (recommended).
+
+To also include optional extras in the same one-step command:
+
+```bash
+./install-to-sd.sh --sd /Volumes/EDGETX --yes --with-sounds --with-scripts
+```
+
+### Recommended (Like Other Telemetry Widgets)
+
+Copy only the widget folder:
+
+```
+WIDGETS/BFTelem  ->  [SD CARD]/WIDGETS/BFTelem
+```
+
+This is the same low-risk pattern used by most telemetry widgets (copy one script/widget folder into the existing SD card parent folder).
+
+`SOUNDS/` is optional and only needed if you want custom voice overrides.
+
+### Alternate (Drag-and-Drop Repo Top-Level Folders)
+
+**⚠️ macOS Users: See the Safe Installation section above first.**
+Dragging top-level SOUNDS/WIDGETS folders onto your SD card root in Finder may show a replace-style prompt. Prefer copying only `WIDGETS/BFTelem` (recommended above), or use `install-to-sd.sh` for safe merge behavior.
+
+This repository now includes top-level EdgeTX SD folders:
+
+```
+WIDGETS/
+SOUNDS/
+SCRIPTS/
+```
+
+After downloading and unzipping, if you use this alternate method, copy these folders directly to the root of your EdgeTX SD card.
+
+Main widget path after copy:
+
+```
+/WIDGETS/BFTelem/main.lua
+```
+
+Square theme variant is also included at:
+
+```
+/WIDGETS/BFTelem/main.square.lua
+```
+
+If you want the square theme, replace `main.lua` with `main.square.lua`.
+
+### Manual (Single File)
+
 1. Copy `main.lua` into a new folder on your radio's SD card:
    ```
    /WIDGETS/BFTelem/main.lua
@@ -74,20 +150,58 @@ When you first add the widget, open its **Options** panel on the radio (long-pre
 
 Set these values to match your aircraft and battery:
 
-| Option | Default | Range | What to set |
-|---|---|---|---|
-| `Cells` | 0 | 0 – 8 | `0` = Auto-detect from pack voltage (recommended). `1..8` = manual override |
-| `FullV` | 42 | 30 – 50 | Full cell voltage × 10 (42 = 4.2 V/cell; use 42 for standard LiPo) |
-| `WarnV` | 36 | 30 – 42 | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
-| `CritV` | 34 | 30 – 42 | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
-| `LQWrn` | 70 | 10 – 99 | Link quality % below which LINK Q turns yellow/red |
-| `TmrRed` | 180 | 30 – 900 | Flight timer (seconds) at which the timer tile turns red |
-| `DistRed` | 100 | 20 – 2000 | Distance (metres) at which the DIST tile turns red |
-| `ScreenType` | 0 | 0 – 2 | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
-| `ThrOn` | 5 | 0 – 50 | Throttle % threshold to start the flight timer |
-| `ArmSrc` | — | source | Optional: EdgeTX source for the arm switch/channel |
 
-> **Tip:** `Cells = 0` is best if you switch models (1S whoop, 6S cinewhoop, etc.). The widget auto-detects cell count from `RxBt` pack voltage and falls back safely if a manual value is inconsistent.
+| Option      | Default | Range      | Description |
+|-------------|---------|------------|-------------|
+| `FullV`     | 42      | 30 – 50    | Full cell voltage × 10 (42 = 4.2 V/cell; use 42 for standard LiPo) |
+| `WarnV`     | 36      | 30 – 42    | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
+| `CritV`     | 34      | 30 – 42    | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
+| `LQWrn`     | 70      | 10 – 99    | Link quality % below which LINK Q turns yellow/red |
+| `SndEn`     | 1       | 0 – 1      | Master sound alerts (`0` off, `1` on) |
+| `SndArmd`   | 0       | 0 – 1      | Play ARMED / DISARMED voice alerts |
+| `SndBatt`   | 1       | 0 – 1      | Play battery low/critical voice alerts |
+| `SndRSSI`   | 1       | 0 – 1      | Play low RSSI voice alerts |
+| `RSSIWrn`   | 90      | 60 – 120   | RSSI warning threshold in absolute dBm (e.g. 90 = -90 dBm) |
+| `SndRpt`    | 15      | 5 – 120    | Repeat period (seconds) while an alert condition persists |
+| `TmrRed`    | 180     | 30 – 900   | Flight timer (seconds) at which the timer tile turns red |
+| `DistRed`   | 100     | 20 – 2000  | Distance (metres) at which the DIST tile turns red |
+| `ScreenType`| 0       | 0 – 2      | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
+| `ThrOn`     | 5       | 0 – 50     | Throttle % threshold to start the flight timer |
+
+> **Note:** Battery cell count is now always **auto-detected** from pack voltage. There is no manual cell count or override option. The widget will automatically determine the correct cell count for any battery type (1S–8S) and fall back safely if telemetry is inconsistent.
+
+> **Removed options:** Craft Batt Cells, T1–T12 tile assignments, and ArmSrc are no longer present. The widget now uses a minimal, robust setup for all users.
+
+### Sound Files
+
+**By default**, BF Telemetry uses existing **EdgeTX system voice files** for all announcements, so you get audio alerts automatically without any setup.
+
+Voice file lookup order:
+
+1. **Custom widget sounds** in `/WIDGETS/BFTelem/sounds/` (override EdgeTX system voices)
+2. **EdgeTX system voices** in `/SOUNDS/en/` (default; built into EdgeTX)
+3. **Tone beep fallback** (if neither above exists)
+
+Default EdgeTX system voice mappings:
+
+| Alert | System Voice | Fallback |
+|-------|--------------|----------|
+| ARMED | `armed.wav` | 2200 Hz tone |
+| DISARMED | `disarmed.wav` | 1200 Hz tone |
+| Battery Low | `bat1.wav` | 1300 Hz tone |
+| Battery Critical | `bat0.wav` | 900 Hz tone |
+| Low RSSI | `rssiloss.wav` | 1600 Hz tone |
+| No GPS Fix (arm attempt) | *(none — triple buzzer beep)* | descending 3-tone beep |
+
+**Optional:** To override with custom voices, place WAV files in `/WIDGETS/BFTelem/sounds/` with these names:
+- `armed.wav`
+- `disarmed.wav`
+- `batlow.wav`
+- `batcrit.wav`
+- `lowrssi.wav`
+- `nogpsfix.wav` *(optional custom voice, e.g. "Not ready to arm, waiting for GPS")*
+
+The widget will use custom files in preference to EdgeTX system voices.
 
 ---
 
@@ -243,21 +357,21 @@ Output is saved to `assets/screenshots/`.
 ## Screenshots
 
 ### Numeric Mode
-Large value readout with label and unit. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Large value readout with label and unit. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Numeric Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_num.png)
+![Numeric Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_num.png)
 
 ### Bar Mode
-Horizontal progress bars for at-a-glance percentage comparison across all tiles, while keeping value/unit text readable. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Horizontal progress bars for at-a-glance percentage comparison across all tiles, while keeping value/unit text readable. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Bar Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_bar.png)
+![Bar Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_bar.png)
 
 ### Gauge Mode
-Semicircular arc gauges that grow as the value increases. Arc color follows the metric's threshold semantics (green / yellow / red), with a consistent flat hex border style. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Semicircular arc gauges that grow as the value increases. Arc color follows the metric's threshold semantics (green / yellow / red), with a consistent flat hex border style. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Gauge Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
+![Gauge Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
 
-> The **RX batt** (left) and **TX batt** (right) vertical bars are always visible on the side rails in all three modes.
+> The **RX batt** (left) and **TX batt** (right) vertical bars are always visible on the side rails in all three modes. The persistent GPS status display is also always visible in the bottom left.
 
 ---
 

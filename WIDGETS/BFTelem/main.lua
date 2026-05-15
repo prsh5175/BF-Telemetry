@@ -4,27 +4,24 @@
 -- and a time-of-day clock in the top-right pit gap.
 
 local OPTIONS = {
-  { "Craft Batt Cells", VALUE,  0,  0,  8 },
+  { "Cells",   VALUE, 0, 0, 8 },
   { "FullV",   VALUE, 42, 30, 50 },
   { "WarnV",   VALUE, 36, 30, 42 },
   { "CritV",   VALUE, 34, 30, 42 },
   { "LQWrn",   VALUE, 70, 10, 99 },
+  { "SndEn",   VALUE,  1,  0,  1 },
+  { "SndArmd", VALUE,  0,  0,  1 },
+  { "SndBatt", VALUE,  1,  0,  1 },
+  { "SndRSSI", VALUE,  1,  0,  1 },
+  { "RSSIWrn", VALUE, 90, 60, 120 },
+  { "SndRpt",  VALUE, 15,  5, 120 },
+  { "SndLQ",   VALUE,  1,  0,  1 },
+  { "SndDist", VALUE,  1,  0,  1 },
+  { "SndAlt",  VALUE,  1,  0,  1 },
+  { "AltMax",  VALUE, 122, 10, 500 },
   { "ScreenType", VALUE,  0,  0,  2 },
   { "Theme",   VALUE,  0,  0,  3 },
   { "ThrOn",   VALUE,  5,  0, 50 },
-  { "ArmSrc", SOURCE,  0 },
-  { "T1",      VALUE,  0,  0, 11 },
-  { "T2",      VALUE,  0,  0, 11 },
-  { "T3",      VALUE,  0,  0, 11 },
-  { "T4",      VALUE,  0,  0, 11 },
-  { "T5",      VALUE,  0,  0, 11 },
-  { "T6",      VALUE,  0,  0, 11 },
-  { "T7",      VALUE,  0,  0, 11 },
-  { "T8",      VALUE,  0,  0, 11 },
-  { "T9",      VALUE,  0,  0, 11 },
-  { "T10",     VALUE,  0,  0, 11 },
-  { "T11",     VALUE,  0,  0, 11 },
-  { "T12",     VALUE,  0,  0, 11 },
   { "TmrRed",  VALUE, 180, 30, 900 },
   { "DistRed", VALUE, 100, 20, 2000 },
 }
@@ -40,6 +37,7 @@ local SN_FM    = "FM"
 local SN_TPWR  = "TPWR"
 local SN_RFMD  = "RFMD"
 local SN_DIST  = "Dist"
+local SN_SATS  = "Sats"
 
 -- =========================================================================
 --  COLORS
@@ -250,6 +248,343 @@ local function armTimerStr()
   if _armStart == nil then return "--:--" end
   local sec = math.floor((getTime() - _armStart) / 100)
   return string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+-- =========================================================================
+--  AUDIO ALERTS
+-- =========================================================================
+local _soundPaths = {
+  "/WIDGETS/BFTelem/sounds/",
+  "/SOUNDS/en/",
+}
+
+local _telemetryPrev = false     -- Track previous telemetry state for system sound
+local _nogpsOverlayUntil = 0     -- getTime() deadline while NO GPS banner is visible
+
+local _alerts = {
+  lastRun = 0,
+  armedPrev = false,
+  battLevel = 0,   -- 0=normal, 1=warn, 2=critical
+  rssiLow = false,
+  lqLow = false,
+  failsafe = false,
+  distHigh = false,
+  altHigh = false,
+  armSwitchPrev = false,
+  nextBatt = 0,
+  nextRssi = 0,
+  nextLq = 0,
+  nextDist = 0,
+  nextAlt = 0,
+  nextNogps = 0,
+}
+
+-- Map alert types to existing EdgeTX system voice files.
+-- Falls back to custom widget sounds if these don't exist.
+local _alertVoices = {
+  armed    = { custom = "armed",    system = "armed" },
+  disarmed = { custom = "disarmed", system = "disarmed" },
+  batlow   = { custom = "batlow",   system = "bat1" },
+  batcrit  = { custom = "batcrit",  system = "bat0" },
+  lowrssi  = { custom = "lowrssi",  system = "rssiloss" },
+  lqlow    = { custom = "lqlow",    system = "siglow" },
+  failsafe = { custom = "failsafe", system = "fsact" },
+  distlmt  = { custom = "distlmt",  system = "warnng" },
+  altmax   = { custom = "altmax",   system = "tohigh" },
+  nogpsfix = { custom = "nogpsfix", system = nil },
+}
+
+local function playNamedSound(name)
+  if type(name) ~= "string" or name == "" then return false end
+  if not playFile then return false end
+  for i = 1, #_soundPaths do
+    local ok = pcall(playFile, _soundPaths[i] .. name .. ".wav")
+    if ok then return true end
+  end
+  return false
+end
+
+local function playAlertVoice(alertType)
+  if not _alertVoices[alertType] then return false end
+  
+  local voices = _alertVoices[alertType]
+  
+  -- First try custom widget-local sounds
+  if playNamedSound(voices.custom) then return true end
+  
+  -- Then try EdgeTX system voice files
+  if playNamedSound(voices.system) then return true end
+  
+  return false
+end
+
+local function fallbackBeep(freq)
+  if type(playTone) ~= "function" then return end
+  -- Keep fallback simple and synchronous so missing WAVs still produce an alert.
+  pcall(playTone, freq or 1800, 120, 0)
+end
+
+local function playSystemSound(path)
+  if type(playFile) == "function" then
+    pcall(playFile, path)
+  end
+end
+
+local function playAlert(alertType, fallbackFreq)
+  if not playAlertVoice(alertType) then
+    fallbackBeep(fallbackFreq)
+  end
+end
+
+local function resetAlertState()
+  _alerts.battLevel = 0
+  _alerts.rssiLow   = false
+  _alerts.lqLow     = false
+  _alerts.failsafe  = false
+  _alerts.distHigh  = false
+  _alerts.altHigh   = false
+  _alerts.nextBatt  = 0
+  _alerts.nextRssi  = 0
+  _alerts.nextLq    = 0
+  _alerts.nextDist  = 0
+  _alerts.nextAlt   = 0
+  _alerts.nextNogps = 0
+end
+
+local function playNogpsFixBuzzer()
+  -- No system voice exists for this; play a descending triple beep
+  -- and also try the custom WAV in case the user has provided one.
+  if not playAlertVoice("nogpsfix") then
+    if type(playTone) == "function" then
+      pcall(playTone, 1800, 80, 0)
+      pcall(playTone, 1400, 80, 0)
+      pcall(playTone, 1000, 120, 0)
+    end
+  end
+  -- Show the NO GPS overlay for 1 second (100 ticks = 1s)
+  _nogpsOverlayUntil = (getTime() or 0) + 100
+end
+
+local function getCellVoltage(opts)
+  local pack = getS(SN_VOLT)
+  if type(pack) ~= "number" then return nil end
+  local cells = math.max(1, math.floor(tonumber(opts and opts.Cells) or 1))
+  return pack / cells
+end
+
+local function getWorstRssiDbm()
+  local v1 = getS(SN_RSSI1)
+  local v2 = getS(SN_RSSI2)
+  if type(v1) ~= "number" then v1 = nil end
+  if type(v2) ~= "number" then v2 = nil end
+  if not v1 and not v2 then return nil end
+  if not v1 then return v2 end
+  if not v2 then return v1 end
+  return math.min(v1, v2)
+end
+
+local function repeatCs(opts)
+  local sec = math.max(5, math.floor(tonumber(opts and opts.SndRpt) or 15))
+  return sec * 100
+end
+
+local function resolveBattLevel(cellV, warnV, critV, prev)
+  local hys = 0.05
+  if type(cellV) ~= "number" then return 0 end
+
+  if prev == 2 then
+    if cellV <= (critV + hys) then return 2 end
+    if cellV <= warnV then return 1 end
+    return 0
+  end
+
+  if prev == 1 then
+    if cellV <= critV then return 2 end
+    if cellV <= (warnV + hys) then return 1 end
+    return 0
+  end
+
+  if cellV <= critV then return 2 end
+  if cellV <= warnV then return 1 end
+  return 0
+end
+
+local function resolveRssiLow(rssiDbm, thresholdAbs, prev)
+  local hys = 3
+  if type(rssiDbm) ~= "number" then return false end
+  local absDbm = math.abs(rssiDbm)
+  if prev then
+    return absDbm >= (thresholdAbs - hys)
+  end
+  return absDbm >= thresholdAbs
+end
+
+local function tickAlerts(opts)
+  local now = getTime() or 0
+  if (now - (_alerts.lastRun or 0)) < 10 then
+    return
+  end
+  _alerts.lastRun = now
+
+  -- Play EdgeTX system 'Telemetry Connected' sound on rising edge
+  local telemetryNow = hasActiveTelemetry()
+  if telemetryNow and not _telemetryPrev then
+    playSystemSound("/SOUNDS/en/telemetry.wav")
+  end
+  _telemetryPrev = telemetryNow
+
+  if (opts and opts.SndEn or 0) == 0 then
+    _alerts.armedPrev = _lastArmed
+    resetAlertState()
+    return
+  end
+
+  if not telemetryNow then
+    _alerts.armedPrev = false
+    resetAlertState()
+    return
+  end
+
+  -- Arm-switch-high but GPS not fixed: alert on rising edge of arm switch
+  do
+    local switchHigh = sourceIsArmed(opts and opts.ArmSrc)
+    local risingEdge = switchHigh and not _alerts.armSwitchPrev
+    if risingEdge and not _lastArmed then
+      local sats = getS(SN_SATS)
+      local noFix = (type(sats) ~= "number") or (sats < 6)
+      if noFix then
+        local due = now >= (_alerts.nextNogps or 0)
+        if due then
+          playNogpsFixBuzzer()
+          _alerts.nextNogps = now + 300  -- 3s cooldown between retries
+        end
+      end
+    end
+    _alerts.armSwitchPrev = switchHigh
+  end
+
+  if (opts and opts.SndArmd or 0) == 1 then
+    if _lastArmed and not _alerts.armedPrev then
+      playSystemSound("/SOUNDS/en/armed.wav")
+    elseif (not _lastArmed) and _alerts.armedPrev then
+      playAlert("disarmed", 1200)
+    end
+  end
+  _alerts.armedPrev = _lastArmed
+
+  if not _lastArmed then
+    resetAlertState()
+    return
+  end
+
+  if (opts and opts.SndBatt or 0) == 1 then
+    local cellV = getCellVoltage(opts)
+    local warnV = (tonumber(opts and opts.WarnV) or 36) / 10.0
+    local critV = (tonumber(opts and opts.CritV) or 34) / 10.0
+    local newLevel = resolveBattLevel(cellV, warnV, critV, _alerts.battLevel)
+    local changed = (newLevel ~= _alerts.battLevel)
+
+    if newLevel > 0 then
+      local due = now >= (_alerts.nextBatt or 0)
+      if changed or due then
+        if newLevel >= 2 then
+          playAlert("batcrit", 900)
+        else
+          playAlert("batlow", 1300)
+        end
+        _alerts.nextBatt = now + repeatCs(opts)
+      end
+    end
+    _alerts.battLevel = newLevel
+  else
+    _alerts.battLevel = 0
+    _alerts.nextBatt = 0
+  end
+
+  if (opts and opts.SndRSSI or 0) == 1 then
+    local rssi = getWorstRssiDbm()
+    local thr = math.max(60, math.floor(tonumber(opts and opts.RSSIWrn) or 90))
+    local newLow = resolveRssiLow(rssi, thr, _alerts.rssiLow)
+    local changed = (newLow ~= _alerts.rssiLow)
+
+    if newLow then
+      local due = now >= (_alerts.nextRssi or 0)
+      if changed or due then
+        playAlert("lowrssi", 1600)
+        _alerts.nextRssi = now + repeatCs(opts)
+      end
+    end
+
+    _alerts.rssiLow = newLow
+  else
+    _alerts.rssiLow = false
+    _alerts.nextRssi = 0
+  end
+
+  -- Low Link Quality alert (reuses LQWrn display threshold)
+  if (opts and opts.SndLQ or 0) == 1 then
+    local lq = getS(SN_LQ)
+    local thr = math.max(10, math.floor(tonumber(opts and opts.LQWrn) or 70))
+    local newLow = type(lq) == "number" and lq < thr
+    local changed = (newLow ~= _alerts.lqLow)
+    if newLow then
+      local due = now >= (_alerts.nextLq or 0)
+      if changed or due then
+        playAlert("lqlow", 1700)
+        _alerts.nextLq = now + repeatCs(opts)
+      end
+    end
+    _alerts.lqLow = newLow
+  else
+    _alerts.lqLow = false
+    _alerts.nextLq = 0
+  end
+
+  -- Failsafe: edge-triggered from Betaflight FM string (no repeat suppression)
+  local fsNow = type(_fmStr) == "string" and
+                string.find(string.upper(_fmStr), "FAIL") ~= nil
+  if fsNow and not _alerts.failsafe then
+    playAlert("failsafe", 600)  -- deep urgent tone
+  end
+  _alerts.failsafe = fsNow
+
+  -- Distance limit alert (reuses DistRed display threshold)
+  if (opts and opts.SndDist or 0) == 1 then
+    local dist = getS(SN_DIST)
+    local thr = math.max(20, math.floor(tonumber(opts and opts.DistRed) or 100))
+    local newHigh = type(dist) == "number" and dist >= thr
+    local changed = (newHigh ~= _alerts.distHigh)
+    if newHigh then
+      local due = now >= (_alerts.nextDist or 0)
+      if changed or due then
+        playAlert("distlmt", 1500)
+        _alerts.nextDist = now + repeatCs(opts)
+      end
+    end
+    _alerts.distHigh = newHigh
+  else
+    _alerts.distHigh = false
+    _alerts.nextDist = 0
+  end
+
+  -- Altitude warning (default 122m ≈ 400ft, configurable via AltMax in metres)
+  if (opts and opts.SndAlt or 0) == 1 then
+    local alt = getS(SN_ALT)
+    local thr = math.max(10, math.floor(tonumber(opts and opts.AltMax) or 122))
+    local newHigh = type(alt) == "number" and alt >= thr
+    local changed = (newHigh ~= _alerts.altHigh)
+    if newHigh then
+      local due = now >= (_alerts.nextAlt or 0)
+      if changed or due then
+        playAlert("altmax", 1400)
+        _alerts.nextAlt = now + repeatCs(opts)
+      end
+    end
+    _alerts.altHigh = newHigh
+  else
+    _alerts.altHigh = false
+    _alerts.nextAlt = 0
+  end
 end
 
 -- =========================================================================
@@ -1485,7 +1820,11 @@ local function drawHeader(o)
   drawHeaderTextC(400, 10, fmDisp, fmCol)
   -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)
   lcd.drawFilledRectangle(500, 8, 2, 58, C_SIL_LO)
-  if _lastArmed then
+  if _nogpsOverlayUntil and (getTime() or 0) < _nogpsOverlayUntil then
+    local s = "NO GPS"
+    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_RED)
+  elseif _lastArmed then
     drawHeaderText(530, 10, "ARMED", C_RED)
   else
     local s = "DISARMED"
@@ -1624,6 +1963,10 @@ local function create(zone, options)
   _armStart = nil
   _lastArmed = false
   _lastThrUp = false
+  _alerts.lastRun = 0
+  _alerts.armedPrev = false
+  _nogpsOverlayUntil = 0
+  resetAlertState()
   syncTileSlotsFromOptions(options)
   local loaded = loadTileSlotsFromStorage(options)
   if not loaded and optionsAllLinkQ(options) then
@@ -1659,7 +2002,10 @@ local function update(widget, options)
   syncTileSlotsFromOptions(options)
   saveTileSlotsToStorage(options)
 end
-local function background(widget)      tickArmTimer(widget.options) end
+local function background(widget)
+  tickArmTimer(widget.options)
+  tickAlerts(widget.options)
+end
 
 local function refresh(widget, event, touchState)
   _gaugeBgBuildBudget = 2
@@ -1677,6 +2023,7 @@ local function refresh(widget, event, touchState)
   end
 
   tickArmTimer(widget.options)
+  tickAlerts(widget.options)
 
   -- Draw order: pit/grid first, then menu overlay, frame/rails, then header text.
   lcd.drawFilledRectangle(0, 0, 800, 480, C_BG)
@@ -1686,6 +2033,45 @@ local function refresh(widget, event, touchState)
   drawCarbonFrame()
   drawSideBatteryBars(widget.options)
   drawHeader(widget.options)
+
+  -- NO GPS overlay: big red banner, shown for ~1 second after alert fires
+  if (getTime() or 0) < _nogpsOverlayUntil then
+    local msg = "NO GPS"
+    local flags = DBLSIZE + BOLD
+    local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 160, 38
+    local tx = math.floor((800 - (tw or 160)) / 2)
+    local ty = math.floor((480 - (th or 38)) / 2)
+    -- Semi-transparent dark backdrop
+    lcd.drawFilledRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, lcd.RGB(20, 0, 0))
+    lcd.drawRectangle(tx - 20, ty - 14, (tw or 160) + 40, (th or 38) + 28, C_RED)
+    -- Shadow + text
+    lcd.drawText(tx + 2, ty + 2, msg, flags + lcd.RGB(80, 0, 0))
+    lcd.drawText(tx, ty, msg, flags + C_RED)
+  end
+end
+
+-- =========================================================================
+--  GPS STATUS (bottom left persistent display)
+-- =========================================================================
+local function drawGpsStatus()
+  local sats = getS(SN_SATS)
+  local hasFix = (type(sats) == "number") and (sats >= 6)
+  -- Move higher: 48px above bottom of pit area
+  local x = GX + 10
+  local y = GY + GH - 60
+  if hasFix then
+    -- Top line: "GPS Locked" (green, smlsize, not bold, same as NO GPS LOCK)
+    lcd.drawText(x + 1, y - 2, "GPS Locked", SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y - 4, "GPS Locked", SMLSIZE + C_GREEN)
+    -- Bottom line: "(Sats = xx)" (green, smlsize, moved further down)
+    local satsStr = string.format("(Sats = %d)", sats)
+    lcd.drawText(x + 2, y + 18, satsStr, SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y + 16, satsStr, SMLSIZE + C_GREEN)
+  else
+    -- One line: "NO GPS LOCK" (red, smlsize, smaller font)
+    lcd.drawText(x + 1, y + 1, "NO GPS LOCK", SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y, "NO GPS LOCK", SMLSIZE + C_RED)
+  end
 end
 
 return {
@@ -1694,5 +2080,8 @@ return {
   create     = create,
   update     = update,
   background = background,
-  refresh    = refresh,
+  refresh    = function(widget, event, touchState)
+    refresh(widget, event, touchState)
+    drawGpsStatus()
+  end,
 }
