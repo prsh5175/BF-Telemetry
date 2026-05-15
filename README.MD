@@ -2,6 +2,8 @@
 
 An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, designed specifically for its 800×480 color LCD touchscreen. It displays 12 live Betaflight/ELRS telemetry tiles in a hex honeycomb layout, with TX and RX battery level bars on the side rails and a time-of-day clock in the top-right pit area.
 
+> **Supported radio:** Radiomaster TX16S MK III. Support for the **Radiomaster T15 Max**, **TX16S MK II**, and **Jumper T16** is currently in development.
+
 ---
 
 ## Requirements
