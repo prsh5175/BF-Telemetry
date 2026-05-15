@@ -854,6 +854,27 @@ def draw_header(surf, mode, armed, fm_str):
     tx(surf, "TIME", cx, cy, L['C_SIL_MID'], F_SML, align="right")
     tx(surf, clock_s, cx, cy + 12, L['C_SIL_HI'], F_MID, align="right")
 
+def draw_gps_status(surf):
+    """Draw GPS status in bottom left of pit area (GPS Locked or NO GPS LOCK)."""
+    sats = SIM.get("Sats")
+    has_fix = isinstance(sats, (int, float)) and sats >= 6
+    x = L['GX'] + 10
+    y = L['GY'] + L['GH'] - 60
+    
+    if has_fix:
+        # GPS Locked: two lines, green
+        # Top line: "GPS Locked" with silhouette offset
+        tx(surf, "GPS Locked", x + 1, y - 2, L['C_SIL_DK'], F_SML)
+        tx(surf, "GPS Locked", x, y - 4, L['C_GREEN'], F_SML)
+        # Bottom line: "(Sats = xx)" with silhouette offset
+        sats_str = f"(Sats = {int(sats)})"
+        tx(surf, sats_str, x + 2, y + 18, L['C_SIL_DK'], F_SML)
+        tx(surf, sats_str, x, y + 16, L['C_GREEN'], F_SML)
+    else:
+        # NO GPS LOCK: one line, red
+        tx(surf, "NO GPS LOCK", x + 1, y + 1, L['C_SIL_DK'], F_SML)
+        tx(surf, "NO GPS LOCK", x, y, L['C_RED'], F_SML)
+
 # ── Simulated sensor values  (edit to preview different states) ───────────────
 SIM = {
     "RQly": 98,
@@ -866,6 +887,7 @@ SIM = {
     "TPWR": 250,
     "RFMD": 6,
     "Dist": 145.0,
+    "Sats": 12,      # GPS satellite count (≥6 = fix)
     "thr":  35,
     "tx-voltage": 7.8,
     "FM":   "ANGLE",
@@ -958,6 +980,7 @@ class LuaWidgetBridge:
             "TPWR": 250,
             "RFMD": 6,
             "Dist": 145.0,
+            "Sats": 12,
             "thr": int((35 * 20.48) - 1024),
             "tx-voltage": 7.8,
             "FM": "!DISARMED",

@@ -59,6 +59,7 @@ for mode, label, filename in MODES:
     E.draw_frame(surf)
     E.draw_side_battery_bars(surf, E.SIM.get("tx-voltage"), E.SIM.get("RxBt"), rx_cells=4)
     E.draw_header(surf, mode, armed, fm_str)
+    E.draw_gps_status(surf)
 
     out_path = os.path.join(OUT_DIR, filename)
     pygame.image.save(surf, out_path)
