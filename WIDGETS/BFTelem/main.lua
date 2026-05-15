@@ -4,13 +4,13 @@
 -- and a time-of-day clock in the top-right pit gap.
 
 local OPTIONS = {
-  { "Craft Batt Cells", VALUE,  0,  0,  8 },
+  { "Cells",   VALUE, 0, 0, 8 },
   { "FullV",   VALUE, 42, 30, 50 },
   { "WarnV",   VALUE, 36, 30, 42 },
   { "CritV",   VALUE, 34, 30, 42 },
   { "LQWrn",   VALUE, 70, 10, 99 },
   { "SndEn",   VALUE,  1,  0,  1 },
-  { "SndArmd", VALUE,  1,  0,  1 },
+  { "SndArmd", VALUE,  0,  0,  1 },
   { "SndBatt", VALUE,  1,  0,  1 },
   { "SndRSSI", VALUE,  1,  0,  1 },
   { "RSSIWrn", VALUE, 90, 60, 120 },
@@ -22,19 +22,6 @@ local OPTIONS = {
   { "ScreenType", VALUE,  0,  0,  2 },
   { "Theme",   VALUE,  0,  0,  3 },
   { "ThrOn",   VALUE,  5,  0, 50 },
-  { "ArmSrc", SOURCE,  0 },
-  { "T1",      VALUE,  0,  0, 11 },
-  { "T2",      VALUE,  0,  0, 11 },
-  { "T3",      VALUE,  0,  0, 11 },
-  { "T4",      VALUE,  0,  0, 11 },
-  { "T5",      VALUE,  0,  0, 11 },
-  { "T6",      VALUE,  0,  0, 11 },
-  { "T7",      VALUE,  0,  0, 11 },
-  { "T8",      VALUE,  0,  0, 11 },
-  { "T9",      VALUE,  0,  0, 11 },
-  { "T10",     VALUE,  0,  0, 11 },
-  { "T11",     VALUE,  0,  0, 11 },
-  { "T12",     VALUE,  0,  0, 11 },
   { "TmrRed",  VALUE, 180, 30, 900 },
   { "DistRed", VALUE, 100, 20, 2000 },
 }
@@ -271,7 +258,8 @@ local _soundPaths = {
   "/SOUNDS/en/",
 }
 
-local _nogpsOverlayUntil = 0   -- getTime() deadline while NO GPS banner is visible
+local _telemetryPrev = false     -- Track previous telemetry state for system sound
+local _nogpsOverlayUntil = 0     -- getTime() deadline while NO GPS banner is visible
 
 local _alerts = {
   lastRun = 0,
@@ -334,6 +322,12 @@ local function fallbackBeep(freq)
   if type(playTone) ~= "function" then return end
   -- Keep fallback simple and synchronous so missing WAVs still produce an alert.
   pcall(playTone, freq or 1800, 120, 0)
+end
+
+local function playSystemSound(path)
+  if type(playFile) == "function" then
+    pcall(playFile, path)
+  end
 end
 
 local function playAlert(alertType, fallbackFreq)
@@ -432,13 +426,20 @@ local function tickAlerts(opts)
   end
   _alerts.lastRun = now
 
+  -- Play EdgeTX system 'Telemetry Connected' sound on rising edge
+  local telemetryNow = hasActiveTelemetry()
+  if telemetryNow and not _telemetryPrev then
+    playSystemSound("/SOUNDS/en/telemetry.wav")
+  end
+  _telemetryPrev = telemetryNow
+
   if (opts and opts.SndEn or 0) == 0 then
     _alerts.armedPrev = _lastArmed
     resetAlertState()
     return
   end
 
-  if not hasActiveTelemetry() then
+  if not telemetryNow then
     _alerts.armedPrev = false
     resetAlertState()
     return
@@ -464,7 +465,7 @@ local function tickAlerts(opts)
 
   if (opts and opts.SndArmd or 0) == 1 then
     if _lastArmed and not _alerts.armedPrev then
-      playAlert("armed", 2200)
+      playSystemSound("/SOUNDS/en/armed.wav")
     elseif (not _lastArmed) and _alerts.armedPrev then
       playAlert("disarmed", 1200)
     end
@@ -1819,7 +1820,11 @@ local function drawHeader(o)
   drawHeaderTextC(400, 10, fmDisp, fmCol)
   -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)
   lcd.drawFilledRectangle(500, 8, 2, 58, C_SIL_LO)
-  if _lastArmed then
+  if _nogpsOverlayUntil and (getTime() or 0) < _nogpsOverlayUntil then
+    local s = "NO GPS"
+    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_RED)
+  elseif _lastArmed then
     drawHeaderText(530, 10, "ARMED", C_RED)
   else
     local s = "DISARMED"

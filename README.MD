@@ -17,7 +17,27 @@ An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, des
 
 ## Installation
 
+### Safe Installation (macOS Recommended) 🆕
+
+If you're on **macOS** and have other Lua scripts on your SD card (Yaapu, iNav, etc.), use the included safe installer script to merge files without deleting anything:
+
+```bash
+cd /path/to/BF-Telemetry
+./install-to-sd.sh
+```
+
+The script will:
+1. Ask you to select your SD card mount path
+2. Safely merge files using `rsync` (no deletes, only updates)
+3. Preserve all existing scripts (Yaapu, iNav, custom Lua, etc.)
+4. Show a summary before confirming
+
+This is the **safest method** and fully automated. No need for Finder drag-and-drop.
+
 ### Recommended (Drag-and-Drop This Repo)
+
+**⚠️ macOS Users: See the Safe Installation section above first.**  
+Dragging top-level SOUNDS/WIDGETS folders onto your SD card root in Finder may show "Replace" instead of "Merge", which can delete other scripts. Use the installer script instead.
 
 This repository now includes top-level EdgeTX SD folders:
 
@@ -104,26 +124,27 @@ When you first add the widget, open its **Options** panel on the radio (long-pre
 
 Set these values to match your aircraft and battery:
 
-| Option | Default | Range | What to set |
-|---|---|---|---|
-| `Cells` | 0 | 0 – 8 | `0` = Auto-detect from pack voltage (recommended). `1..8` = manual override |
-| `FullV` | 42 | 30 – 50 | Full cell voltage × 10 (42 = 4.2 V/cell; use 42 for standard LiPo) |
-| `WarnV` | 36 | 30 – 42 | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
-| `CritV` | 34 | 30 – 42 | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
-| `LQWrn` | 70 | 10 – 99 | Link quality % below which LINK Q turns yellow/red |
-| `SndEn` | 1 | 0 – 1 | Master sound alerts (`0` off, `1` on) |
-| `SndArmd` | 1 | 0 – 1 | Play ARMED / DISARMED voice alerts |
-| `SndBatt` | 1 | 0 – 1 | Play battery low/critical voice alerts |
-| `SndRSSI` | 1 | 0 – 1 | Play low RSSI voice alerts |
-| `RSSIWrn` | 90 | 60 – 120 | RSSI warning threshold in absolute dBm (e.g. 90 = -90 dBm) |
-| `SndRpt` | 15 | 5 – 120 | Repeat period (seconds) while an alert condition persists |
-| `TmrRed` | 180 | 30 – 900 | Flight timer (seconds) at which the timer tile turns red |
-| `DistRed` | 100 | 20 – 2000 | Distance (metres) at which the DIST tile turns red |
-| `ScreenType` | 0 | 0 – 2 | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
-| `ThrOn` | 5 | 0 – 50 | Throttle % threshold to start the flight timer |
-| `ArmSrc` | — | source | Optional: EdgeTX source for the arm switch/channel |
 
-> **Tip:** `Cells = 0` is best if you switch models (1S whoop, 6S cinewhoop, etc.). The widget auto-detects cell count from `RxBt` pack voltage and falls back safely if a manual value is inconsistent.
+| Option      | Default | Range      | Description |
+|-------------|---------|------------|-------------|
+| `FullV`     | 42      | 30 – 50    | Full cell voltage × 10 (42 = 4.2 V/cell; use 42 for standard LiPo) |
+| `WarnV`     | 36      | 30 – 42    | Warning voltage × 10 (36 = 3.6 V — tile turns yellow below this) |
+| `CritV`     | 34      | 30 – 42    | Critical voltage × 10 (34 = 3.4 V — tile turns red below this) |
+| `LQWrn`     | 70      | 10 – 99    | Link quality % below which LINK Q turns yellow/red |
+| `SndEn`     | 1       | 0 – 1      | Master sound alerts (`0` off, `1` on) |
+| `SndArmd`   | 0       | 0 – 1      | Play ARMED / DISARMED voice alerts |
+| `SndBatt`   | 1       | 0 – 1      | Play battery low/critical voice alerts |
+| `SndRSSI`   | 1       | 0 – 1      | Play low RSSI voice alerts |
+| `RSSIWrn`   | 90      | 60 – 120   | RSSI warning threshold in absolute dBm (e.g. 90 = -90 dBm) |
+| `SndRpt`    | 15      | 5 – 120    | Repeat period (seconds) while an alert condition persists |
+| `TmrRed`    | 180     | 30 – 900   | Flight timer (seconds) at which the timer tile turns red |
+| `DistRed`   | 100     | 20 – 2000  | Distance (metres) at which the DIST tile turns red |
+| `ScreenType`| 0       | 0 – 2      | Display style: `0` = numeric, `1` = bar, `2` = arc gauge |
+| `ThrOn`     | 5       | 0 – 50     | Throttle % threshold to start the flight timer |
+
+> **Note:** Battery cell count is now always **auto-detected** from pack voltage. There is no manual cell count or override option. The widget will automatically determine the correct cell count for any battery type (1S–8S) and fall back safely if telemetry is inconsistent.
+
+> **Removed options:** Craft Batt Cells, T1–T12 tile assignments, and ArmSrc are no longer present. The widget now uses a minimal, robust setup for all users.
 
 ### Sound Files
 
