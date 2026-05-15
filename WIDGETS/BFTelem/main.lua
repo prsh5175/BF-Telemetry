@@ -2050,11 +2050,38 @@ local function refresh(widget, event, touchState)
   end
 end
 
+-- =========================================================================
+--  GPS STATUS (bottom left persistent display)
+-- =========================================================================
+local function drawGpsStatus()
+  local sats = getS(SN_SATS)
+  local hasFix = (type(sats) == "number") and (sats >= 6)
+  -- Move higher: 48px above bottom of pit area
+  local x = GX + 10
+  local y = GY + GH - 60
+  if hasFix then
+    -- Top line: "GPS Locked" (green, smlsize, not bold, same as NO GPS LOCK)
+    lcd.drawText(x + 1, y - 2, "GPS Locked", SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y - 4, "GPS Locked", SMLSIZE + C_GREEN)
+    -- Bottom line: "(Sats = xx)" (green, smlsize, moved further down)
+    local satsStr = string.format("(Sats = %d)", sats)
+    lcd.drawText(x + 2, y + 18, satsStr, SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y + 16, satsStr, SMLSIZE + C_GREEN)
+  else
+    -- One line: "NO GPS LOCK" (red, smlsize, smaller font)
+    lcd.drawText(x + 1, y + 1, "NO GPS LOCK", SMLSIZE + C_SIL_DK)
+    lcd.drawText(x, y, "NO GPS LOCK", SMLSIZE + C_RED)
+  end
+end
+
 return {
   name       = "BF Telemetry",
   options    = OPTIONS,
   create     = create,
   update     = update,
   background = background,
-  refresh    = refresh,
+  refresh    = function(widget, event, touchState)
+    refresh(widget, event, touchState)
+    drawGpsStatus()
+  end,
 }

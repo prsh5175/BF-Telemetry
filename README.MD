@@ -357,21 +357,21 @@ Output is saved to `assets/screenshots/`.
 ## Screenshots
 
 ### Numeric Mode
-Large value readout with label and unit. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Large value readout with label and unit. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Numeric Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_num.png)
+![Numeric Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_num.png)
 
 ### Bar Mode
-Horizontal progress bars for at-a-glance percentage comparison across all tiles, while keeping value/unit text readable. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Horizontal progress bars for at-a-glance percentage comparison across all tiles, while keeping value/unit text readable. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Bar Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_bar.png)
+![Bar Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_bar.png)
 
 ### Gauge Mode
-Semicircular arc gauges that grow as the value increases. Arc color follows the metric's threshold semantics (green / yellow / red), with a consistent flat hex border style. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap.
+Semicircular arc gauges that grow as the value increases. Arc color follows the metric's threshold semantics (green / yellow / red), with a consistent flat hex border style. RX batt (left) and TX batt (right) bars are visible on the side rails, with the time shown in the top-right gap. The persistent GPS status is now shown in the bottom left, as seen below.
 
-![Gauge Mode](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
+![Gauge Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
 
-> The **RX batt** (left) and **TX batt** (right) vertical bars are always visible on the side rails in all three modes.
+> The **RX batt** (left) and **TX batt** (right) vertical bars are always visible on the side rails in all three modes. The persistent GPS status display is also always visible in the bottom left.
 
 ---
 
