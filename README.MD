@@ -1,6 +1,6 @@
 # BF Telemetry Widget
 
-An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, designed specifically for its 800×480 color LCD touchscreen. It displays 12 live Betaflight/ELRS telemetry tiles in a hex honeycomb layout, with TX and RX battery level bars on the side rails and a time-of-day clock in the top-right pit area.
+An EdgeTX full-screen telemetry widget for **Radiomaster TX16S MK III** (800×480) and **Radiomaster TX15 Max** (480×320), with responsive layout that adapts to different screen sizes. Displays 12 live Betaflight/ELRS telemetry tiles in a hex honeycomb layout (TX16S) or 12 tiles in a 4×3 grid (TX15 Max), with TX and RX battery level bars on the side rails and a time-of-day clock in the top-right pit area.
 
 ---
 
@@ -10,8 +10,20 @@ An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, des
 |---|---|
 | EdgeTX | 2.12+ |
 | Lua | 5.3 |
-| Radio | Radiomaster TX16S MK III (800×480 screen) |
+| Radio | Radiomaster TX16S MK III (800×480) or TX15 Max (480×320) |
 | Telemetry | Betaflight + ExpressLRS (ELRS) |
+
+---
+
+## Screen Compatibility
+
+The widget is fully responsive and adapts to different screen sizes:
+
+- **TX16S MK III (800×480)** — 6 columns × 2 rows hex honeycomb grid, spacious layout
+- **TX15 Max (480×320)** — 4 columns × 3 rows grid layout, compact scaled UI
+- **Other radios** — Layout scales proportionally; as long as EdgeTX 2.12+ and Lua 5.3 are supported, it should work.
+
+All features (audio alerts, GPS status, battery bars, clock) are available on both screen sizes.
 
 ---
 
@@ -123,7 +135,7 @@ To use the Square Tiles theme, copy `Other Themes/Square_tiles/main.lua` to your
 
 ## Telemetry Tiles
 
-The widget shows 12 tiles populated automatically from your ELRS/Betaflight telemetry stream:
+The widget displays up to 12 tiles populated automatically from your ELRS/Betaflight telemetry stream. On the TX16S MK III, tiles are arranged in a 6-column × 2-row honeycomb grid. On the TX15 Max and other smaller screens, tiles are arranged in a 4-column × 3-row grid for better fit.
 
 | Tile | Sensor | Unit |
 |---|---|---|
