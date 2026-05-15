@@ -34,6 +34,22 @@ The script will:
 
 This is the **safest method** and fully automated. No need for Finder drag-and-drop.
 
+#### One-step command mode (no prompts)
+
+If you already know your SD mount path, run one command:
+
+```bash
+./install-to-sd.sh --sd /Volumes/EDGETX --yes
+```
+
+That installs only `WIDGETS/BFTelem` (recommended).
+
+To also include optional extras in the same one-step command:
+
+```bash
+./install-to-sd.sh --sd /Volumes/EDGETX --yes --with-sounds --with-scripts
+```
+
 ### Recommended (Like Other Telemetry Widgets)
 
 Copy only the widget folder:
