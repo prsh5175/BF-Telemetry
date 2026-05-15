@@ -34,10 +34,22 @@ The script will:
 
 This is the **safest method** and fully automated. No need for Finder drag-and-drop.
 
-### Recommended (Drag-and-Drop This Repo)
+### Recommended (Like Other Telemetry Widgets)
 
-**⚠️ macOS Users: See the Safe Installation section above first.**  
-Dragging top-level SOUNDS/WIDGETS folders onto your SD card root in Finder may show "Replace" instead of "Merge", which can delete other scripts. Use the installer script instead.
+Copy only the widget folder:
+
+```
+WIDGETS/BFTelem  ->  [SD CARD]/WIDGETS/BFTelem
+```
+
+This is the same low-risk pattern used by most telemetry widgets (copy one script/widget folder into the existing SD card parent folder).
+
+`SOUNDS/` is optional and only needed if you want custom voice overrides.
+
+### Alternate (Drag-and-Drop Repo Top-Level Folders)
+
+**⚠️ macOS Users: See the Safe Installation section above first.**
+Dragging top-level SOUNDS/WIDGETS folders onto your SD card root in Finder may show a replace-style prompt. Prefer copying only `WIDGETS/BFTelem` (recommended above), or use `install-to-sd.sh` for safe merge behavior.
 
 This repository now includes top-level EdgeTX SD folders:
 
@@ -47,7 +59,7 @@ SOUNDS/
 SCRIPTS/
 ```
 
-After downloading and unzipping, copy these folders directly to the root of your EdgeTX SD card.
+After downloading and unzipping, if you use this alternate method, copy these folders directly to the root of your EdgeTX SD card.
 
 Main widget path after copy:
 

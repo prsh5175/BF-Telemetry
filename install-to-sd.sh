@@ -18,6 +18,7 @@ echo -e "${BLUE}============================================${NC}"
 echo ""
 echo "This script will safely merge BF-Telemetry files to your SD card"
 echo "without deleting other scripts (Yaapu, iNav, etc.)"
+echo "Default mode installs only WIDGETS/BFTelem (recommended)."
 echo ""
 
 # List mounted volumes
@@ -43,9 +44,12 @@ fi
 echo ""
 echo -e "${YELLOW}Ready to install to: ${GREEN}$SD_PATH${NC}"
 echo ""
-echo "This will merge:"
+echo "This will always merge:"
 echo "  • WIDGETS/BFTelem -> $SD_PATH/WIDGETS/BFTelem/"
+echo ""
+echo "Optional extras (you can choose later):"
 echo "  • SOUNDS/en/*.wav -> $SD_PATH/SOUNDS/en/"
+echo "  • SCRIPTS/* -> $SD_PATH/SCRIPTS/"
 echo ""
 echo -e "${RED}WARNING: Ensure your SD card is mounted correctly!${NC}"
 read -p "Proceed? (yes/no) " -r
@@ -60,7 +64,6 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Ensure destination folders exist
 echo -e "${BLUE}Creating destination folders if needed...${NC}"
 mkdir -p "$SD_PATH/WIDGETS"
-mkdir -p "$SD_PATH/SOUNDS/en"
 
 # Safe rsync merge: updates files, does NOT delete unrelated folders
 echo ""
@@ -72,13 +75,23 @@ else
     exit 1
 fi
 
-echo ""
-echo -e "${BLUE}Syncing SOUNDS/en...${NC}"
-if rsync -av --exclude ".DS_Store" "$SCRIPT_DIR/SOUNDS/en/" "$SD_PATH/SOUNDS/en/"; then
-    echo -e "${GREEN}✓ SOUNDS merged successfully${NC}"
-else
-    echo -e "${RED}✗ SOUNDS sync failed${NC}"
-    exit 1
+if [ -d "$SCRIPT_DIR/SOUNDS/en" ] && [ "$(ls -A "$SCRIPT_DIR/SOUNDS/en")" ]; then
+    echo ""
+    echo -e "${YELLOW}Optional: merge custom SOUNDS/en files? (yes/no)${NC}"
+    echo "Tip: not required for BF-Telemetry; EdgeTX system voices work by default."
+    read -p "> " -r
+    if [[ $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+        mkdir -p "$SD_PATH/SOUNDS/en"
+        echo -e "${BLUE}Syncing SOUNDS/en...${NC}"
+        if rsync -av --exclude ".DS_Store" "$SCRIPT_DIR/SOUNDS/en/" "$SD_PATH/SOUNDS/en/"; then
+            echo -e "${GREEN}✓ SOUNDS merged successfully${NC}"
+        else
+            echo -e "${RED}✗ SOUNDS sync failed${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${BLUE}Skipping SOUNDS merge.${NC}"
+    fi
 fi
 
 # Optional scripts (ask user first to avoid conflicts)
