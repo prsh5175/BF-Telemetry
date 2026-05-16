@@ -4,26 +4,25 @@
 -- and a time-of-day clock in the top-right pit gap.
 
 local OPTIONS = {
-  { "Cells",   VALUE, 0, 0, 8 },
-  { "FullV",   VALUE, 42, 30, 50 },
-  { "WarnV",   VALUE, 36, 30, 42 },
-  { "CritV",   VALUE, 34, 30, 42 },
-  { "LQWrn",   VALUE, 70, 10, 99 },
-  { "SndEn",   VALUE,  1,  0,  1 },
-  { "SndArmd", VALUE,  0,  0,  1 },
-  { "SndBatt", VALUE,  1,  0,  1 },
-  { "SndRSSI", VALUE,  1,  0,  1 },
-  { "RSSIWrn", VALUE, 90, 60, 120 },
-  { "SndRpt",  VALUE, 15,  5, 120 },
-  { "SndLQ",   VALUE,  1,  0,  1 },
-  { "SndDist", VALUE,  1,  0,  1 },
-  { "SndAlt",  VALUE,  1,  0,  1 },
-  { "AltMax",  VALUE, 122, 10, 500 },
-  { "ScreenType", VALUE,  0,  0,  2 },
-  { "Theme",   VALUE,  0,  0,  3 },
-  { "ThrOn",   VALUE,  5,  0, 50 },
-  { "TmrRed",  VALUE, 180, 30, 900 },
-  { "DistRed", VALUE, 100, 20, 2000 },
+  { "WarnV",      VALUE,  36,  30,   42 },
+  { "LQWrn",      VALUE,  70,  10,   99 },
+  { "Theme",      VALUE,   0,   0,    3 },  -- 0=Yellow  1=Cyan  2=Green  3=Orange
+  { "ScreenType", VALUE,   0,   0,    2 },  -- 0=NUM  1=BAR  2=GAUGE
+  { "FullV",      VALUE,  42,  30,   50 },
+  { "CritV",      VALUE,  34,  30,   42 },
+  { "SndEn",      VALUE,   1,   0,    1 },
+  { "SndArmd",    VALUE,   0,   0,    1 },
+  { "SndBatt",    VALUE,   1,   0,    1 },
+  { "SndRSSI",    VALUE,   1,   0,    1 },
+  { "RSSIWrn",    VALUE,  90,  60,  120 },
+  { "SndRpt",     VALUE,  15,   5,  120 },
+  { "SndLQ",      VALUE,   1,   0,    1 },
+  { "SndDist",    VALUE,   1,   0,    1 },
+  { "SndAlt",     VALUE,   1,   0,    1 },
+  { "AltMax",     VALUE, 122,  10,  500 },
+  { "ThrOn",      VALUE,   5,   0,   50 },
+  { "TmrRed",     VALUE, 180,  30,  900 },
+  { "DistRed",    VALUE, 100,  20, 2000 },
 }
 
 local SN_LQ    = "RQly"
@@ -259,6 +258,7 @@ local _soundPaths = {
 
 local _telemetryPrev = false     -- Track previous telemetry state for system sound
 local _nogpsOverlayUntil = 0     -- getTime() deadline while NO GPS banner is visible
+local _screenTypeBannerUntil = 0 -- getTime() deadline while screen-type toast is visible
 
 local _alerts = {
   lastRun = 0,
@@ -367,7 +367,9 @@ end
 local function getCellVoltage(opts)
   local pack = getS(SN_VOLT)
   if type(pack) ~= "number" then return nil end
-  local cells = math.max(1, math.floor(tonumber(opts and opts.Cells) or 1))
+  -- Auto-detect cell count from pack voltage using FullV per-cell reference
+  local fullV = math.max(3.0, math.min(5.0, (tonumber(opts and opts.FullV) or 42) / 10.0))
+  local cells = math.max(1, math.min(8, math.ceil((pack / fullV) - 0.0001)))
   return pack / cells
 end
 
@@ -969,7 +971,7 @@ local function drawBar(tx, ty, tw, th, pct, col)
   local by = ty
   local bw = tw
   local bh = th
-  if bw < 8 or bh < 10 then return end
+  if bw < 8 or bh < 4 then return end
   lcd.drawFilledRectangle(bx, by, bw, bh, C_SIL_DK)
   local fw = math.floor(bw * math.max(0, math.min(1, (pct or 0)/100)))
   if fw > 0 then
@@ -1274,47 +1276,36 @@ end
 local function drawGaugeLite(tx, ty, tw, th, pct, col, label_str, val_str, unit_str)
   local cx = math.floor(tx + tw / 2)
 
-  -- Keep the dial high enough that label/value/unit can stack beneath it.
-  local arcH = math.floor(th * 0.44)
-  local arcR = math.floor(math.min((tw - 18) / 2, arcH - 2))
-  if arcR < 8 then arcR = 8 end
+  -- Four fixed zones (top → bottom), nothing overlaps:
+  --   label  (SMLSIZE, ~12px)  at top
+  --   arc    (semicircle)       in the middle band
+  --   value  (MIDSIZE, ~16px)  below arc
+  --   unit   (SMLSIZE, ~12px)  at bottom
+  local labelY = ty + 2
+  local unitY  = ty + th - 12
+  local valY   = unitY - 24
+
+  -- Arc fills the band between label and value
+  local arcTop   = labelY + 14          -- 14px reserved for label text
+  local arcAreaH = math.max(4, valY - arcTop - 2)
+  local arcR     = math.floor(math.min(math.min((tw - 14) / 2, arcAreaH), tw * 0.36))
+  if arcR < 6 then arcR = 6 end
 
   local arcCx = cx
-  local arcCy = ty + arcH
-  local yPivot = arcCy
-  local visualBottom = ty + arcH
-
-  local dialBmp = getDialBitmap()
-  if dialBmp then
-    local bw = DIAL_BMP_W
-    local bh = DIAL_BMP_H
-    local bx = cx - math.floor(bw / 2) + DIAL_BMP_OFF_X
-    local by = ty + DIAL_BMP_OFF_Y
-    drawDialBitmap(dialBmp, bx, by)
-    arcCx = bx + math.floor(bw / 2)
-    arcCy = by + bh - 3
-    yPivot = arcCy
-    visualBottom = by + bh - 1
-    local maxR = math.floor((bw - 14) / 2)
-    if arcR > maxR then arcR = maxR end
-  else
-    local maxR = math.floor((tw - 10) / 2)
-    if arcR > maxR then arcR = maxR end
-    visualBottom = arcCy
-  end
+  local arcCy = arcTop + arcR           -- pivot at arcTop + radius
 
   local p = math.max(0, math.min(100, pct or 0))
 
-  -- Background: one-stroke dim full-semicircle track.
+  -- Dim background track (full semicircle)
   local track = getGaugeLiteTrack(arcR)
   for i = 1, #track do
     local ln = track[i]
     lcd.drawLine(arcCx + ln.x1, arcCy + ln.y1, arcCx + ln.x2, arcCy + ln.y2, 0xFF, C_SIL_DK)
   end
 
-  -- Value arc: one-stroke colored arc from left to needle.
+  -- Colored value arc
   if p > 0 then
-    local bucket = math.floor(p / 5 + 0.5) * 5  -- snap to nearest 5%
+    local bucket = math.floor(p / 5 + 0.5) * 5
     if bucket > 100 then bucket = 100 end
     local arc = getGaugeLiteArc(arcR, bucket)
     for i = 1, #arc do
@@ -1323,37 +1314,22 @@ local function drawGaugeLite(tx, ty, tw, th, pct, col, label_str, val_str, unit_
     end
   end
 
-  -- Needle (1 line + 1 rect — always fresh, very cheap).
+  -- Needle + pivot dot
   local aNeedle = _PI - (_PI * p / 100)
   local nx = math.floor(arcCx + arcR * math.cos(aNeedle) + 0.5)
   local ny = math.floor(arcCy - arcR * math.sin(aNeedle) + 0.5)
-  lcd.drawLine(arcCx, yPivot, nx, ny, 0xFF, col or C_WHITE)
-  lcd.drawFilledRectangle(arcCx - 1, yPivot - 1, 3, 3, C_WHITE)
+  lcd.drawLine(arcCx, arcCy, nx, ny, 0xFF, col or C_WHITE)
+  lcd.drawFilledRectangle(arcCx - 1, arcCy - 1, 3, 3, C_WHITE)
 
-  -- Text stack: label starts just below dial bottom, value below label,
-  -- and unit stays near tile bottom.
-  local minLabelY = visualBottom + 4
-  local unitY = ty + th - 20
-  local labelY = minLabelY
-  local valY = labelY + 12
-
-  -- Keep value and label clear of the fixed unit line.
-  local maxValY = unitY - 14
-  if valY > maxValY then
-    valY = maxValY
-    labelY = valY - 12
-    if labelY < minLabelY then
-      labelY = minLabelY
-    end
-  end
-
+  -- Label at top
   if label_str and label_str ~= "" then
     lcd.drawText(cx, labelY, label_str, SMLSIZE + CENTER + C_CYAN)
   end
-
+  -- Value below arc
   if val_str then
     lcd.drawText(cx, valY, val_str, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
   end
+  -- Unit at bottom
   if unit_str then
     lcd.drawText(cx, unitY, unit_str, SMLSIZE + CENTER + C_DIM)
   end
@@ -1446,7 +1422,7 @@ end
 local function tdBatt(o)
   local volt=getS(SN_VOLT)
   local nc=resolveRxCellCount(o, volt)
-  local fV=o.FullV/10.0; local eV=3.30
+  local fV=(tonumber(o and o.FullV) or 42)/10.0; local eV=3.30
   local cV=volt and (volt/nc) or nil
   local pct=cV and math.max(0,math.min(100,(cV-eV)/(fV-eV)*100)) or nil
   return { val=volt and string.format("%.1f",volt) or "---",
@@ -1488,7 +1464,7 @@ end
 local function tdCellV(o)
   local volt=getS(SN_VOLT)
   local nc=resolveRxCellCount(o, volt)
-  local wV=o.WarnV/10.0; local kV=o.CritV/10.0
+  local wV=(tonumber(o and o.WarnV) or 36)/10.0; local kV=(tonumber(o and o.CritV) or 34)/10.0
   local cV=volt and (volt/nc) or nil
   return { val=cV and string.format("%.2f",cV) or "---",
            unit=string.format("V  %dS",nc),
@@ -1755,6 +1731,20 @@ local function handleScrollWheel(widget, event)
     return
   end
   
+  -- Long-press ENTER (no menu open): cycle ScreenType 0(NUM)→1(BAR)→2(GAUGE)→0
+  if event == EVT_VIRTUAL_ENTER_LONG then
+    if not (_touchUi.open and _touchUi.tile) then
+      if widget and widget.options then
+        local cur = getScreenType(widget.options)
+        local nxt = (cur + 1) % 3
+        setScreenType(widget.options, nxt)
+        saveTileSlotsToStorage(widget.options)
+        _screenTypeBannerUntil = (getTime() or 0) + 150  -- ~1.5 s
+      end
+    end
+    return
+  end
+
   -- Handle Enter/OK button
   if event == EVT_VIRTUAL_ENTER then
     local now = getTime() or 0
@@ -1919,11 +1909,11 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
     local pad = math.max(8, math.floor(tw * 0.14))
     local valY = yLbl + 14
     local unitY = ty + math.floor(th * 0.72) + 4
-    local barH = math.max(8, math.min(12, math.floor(th * 0.09)))
-    local barTop = ty + math.floor(th * 0.50) + 6
-    local maxBarTop = unitY - 8 - barH
+    local barH = math.max(6, math.min(8, math.floor(th * 0.08)))
+    local barTop = ty + math.floor(th * 0.65)
+    local maxBarTop = unitY - 4 - barH
     if barTop > maxBarTop then barTop = maxBarTop end
-    if barTop < valY + 10 then barTop = valY + 10 end
+    if barTop < valY + 12 then barTop = valY + 12 end
 
     drawBar(tx + pad, barTop, tw - 2 * pad, barH, d.pct, mCol)
     lcd.drawText(cx, valY, d.val, SMLSIZE + CENTER + BOLD + mCol)
@@ -2178,6 +2168,7 @@ local function create(zone, options)
   _alerts.lastRun = 0
   _alerts.armedPrev = false
   _nogpsOverlayUntil = 0
+  _screenTypeBannerUntil = 0
   resetAlertState()
   syncTileSlotsFromOptions(options)
   local loaded = loadTileSlotsFromStorage(options)
@@ -2262,6 +2253,20 @@ local function refresh(widget, event, touchState)
   drawCarbonFrame()
   drawSideBatteryBars(widget.options)
   drawHeader(widget.options)
+
+  -- Screen-type toast: brief centered banner after long-press ENTER cycle
+  if (getTime() or 0) < _screenTypeBannerUntil then
+    local st = getScreenType(widget.options)
+    local msg = (st == 1) and "SCR: BAR" or (st == 2) and "SCR: GAUGE" or "SCR: NUM"
+    local flags = MIDSIZE + BOLD
+    local tw, th = lcd.getTextSize and lcd.getTextSize(msg, flags) or 80, 20
+    local bx = math.floor((_screenW - (tw or 80)) / 2)
+    local by = math.floor((_screenH - (th or 20)) / 2)
+    lcd.drawFilledRectangle(bx - 14, by - 10, (tw or 80) + 28, (th or 20) + 20, C_SIL_DK)
+    lcd.drawRectangle(bx - 14, by - 10, (tw or 80) + 28, (th or 20) + 20, C_CYAN)
+    lcd.drawText(bx + 1, by + 1, msg, flags + C_SIL_DK)
+    lcd.drawText(bx, by, msg, flags + C_CYAN)
+  end
 
   -- NO GPS overlay: big red banner, shown for ~1 second after alert fires
   if (getTime() or 0) < _nogpsOverlayUntil then
