@@ -649,6 +649,134 @@ end
 -- HX_STEP_X, HX_STEP_Y, HX_TOTAL_W, HX_TOTAL_H, HX_ORG_X, HX_ORG_Y,
 -- MENU_W, MENU_X, MENU_ROW_H, MENU_TITLE_H, MENU_PAD, MENU_MAX_ROWS, MENU_SCROLL_THRESHOLD
 
+-- Module-level screen state (populated by initLayoutConstants / detectDeviceType)
+local _screenW    = 800
+local _screenH    = 480
+local _is480x272  = false
+local _deviceType = "TX16S_MK3"
+
+-- Cache the last initialised screen size to avoid redundant work on every refresh.
+local _layoutInitW = 0
+local _layoutInitH = 0
+
+-- Set all layout constant globals based on the actual screen dimensions.
+-- Accepts an optional zone table (from widget.zone) as the most reliable size source.
+-- Safe to call on every refresh; skips work when the size has not changed.
+local function initLayoutConstants(zone)
+  local w, h
+  -- zone.w/h is the most reliable source in a widget context
+  if zone and type(zone.w) == "number" and zone.w > 0 then
+    w = zone.w
+    h = zone.h or _screenH
+  else
+    w = (lcd.getW and lcd.getW()) or _screenW
+    h = (lcd.getH and lcd.getH()) or _screenH
+  end
+  if w == _layoutInitW and h == _layoutInitH then return end
+  _layoutInitW = w
+  _layoutInitH = h
+  _screenW    = w
+  _screenH    = h
+  _is480x272  = (w <= 480)
+
+  if _is480x272 then
+    -- 480x272: TX16S MK II / Jumper T16 (6 cols x 2 rows honeycomb, same as MK3)
+    FRM_L        = 20
+    FRM_R        = 20
+    FRM_B        = 10
+    TOP_EDGE     = 14
+    TOP_MID      = 48
+    RAMP_W       = 48
+    PEAK_X1      = 120
+    PEAK_X2      = 360
+    HX_COLS      = 6
+    MENU_W       = 320
+    MENU_ROW_H   = 26
+    MENU_TITLE_H = 20
+  else
+    -- 800x480: TX16S MK III (6 cols x 2 rows honeycomb)
+    FRM_L        = 30
+    FRM_R        = 30
+    FRM_B        = 14
+    TOP_EDGE     = 22
+    TOP_MID      = 82
+    RAMP_W       = 80
+    PEAK_X1      = 200
+    PEAK_X2      = 600
+    HX_COLS      = 6
+    MENU_W       = 460
+    MENU_ROW_H   = 38
+    MENU_TITLE_H = 28
+  end
+
+  RAMP_X1 = PEAK_X1 - RAMP_W
+  RAMP_X2 = PEAK_X2 + RAMP_W
+  HX_ROWS = 2
+  HX_GAP  = 2
+
+  GX = FRM_L
+  GY = TOP_MID + 2
+  GW = _screenW - FRM_L - FRM_R
+  GH = _screenH - TOP_MID - FRM_B
+
+  -- Fit hexagon tiles into the available pit area
+  HEX_W = math.floor((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
+  HEX_H = math.floor(HEX_W * 1.00)
+  local maxHexH = math.floor((GH - HX_GAP * 2) / (HX_ROWS + 0.5))
+  if HEX_H > maxHexH then
+    HEX_H = maxHexH
+    HEX_W = math.floor(HEX_H / 1.00)
+  end
+
+  HX_STEP_X  = math.floor(HEX_W * 0.75)
+  HX_STEP_Y  = HEX_H
+  HX_TOTAL_W = HX_STEP_X * (HX_COLS - 1) + HEX_W
+  HX_TOTAL_H = HEX_H * HX_ROWS + math.floor(HEX_H / 2)
+  HX_ORG_X   = GX + math.floor((GW - HX_TOTAL_W) / 2)
+  HX_ORG_Y   = GY + math.floor((GH - HX_TOTAL_H) / 2)
+
+  MENU_X                = math.floor((_screenW - MENU_W) / 2)
+  MENU_PAD              = 8
+  MENU_MAX_ROWS         = 8
+  MENU_SCROLL_THRESHOLD = 10
+end
+
+-- Detect the specific radio model to select appropriate input handling.
+-- Accepts an optional zone table (from widget.zone) as the most reliable size source.
+-- Returns "TX16S_MK3", "TX16S_MK2", or "T16".
+local function detectDeviceType(options, zone)
+  local w, h
+  if zone and type(zone.w) == "number" and zone.w > 0 then
+    w = zone.w
+    h = zone.h or _screenH
+  else
+    w = (lcd.getW and lcd.getW()) or _screenW
+    h = (lcd.getH and lcd.getH()) or _screenH
+  end
+  _screenW   = w
+  _screenH   = h
+  _is480x272 = (w <= 480)
+
+  if not _is480x272 then
+    return "TX16S_MK3"
+  end
+
+  -- Distinguish TX16S MK II (has touchscreen) from Jumper T16 (no touchscreen)
+  -- by checking the radio model name reported by EdgeTX.
+  if radio and radio.getInfo then
+    local ok, info = pcall(radio.getInfo)
+    if ok and type(info) == "table" and type(info.name) == "string" then
+      local name = string.upper(info.name)
+      if string.find(name, "TX16") or string.find(name, "RADIOMASTER") then
+        return "TX16S_MK2"
+      end
+    end
+  end
+
+  -- Default for 480x272 without confirmed TX16S: Jumper T16 (scroll wheel only)
+  return "T16"
+end
+
 local _tileSlots = {}
 local _touchUi = {
   open = false,
@@ -682,46 +810,48 @@ end
 --  Total draw calls: ~100 (was ~4000 with cfStripe column loops).
 -- =========================================================================
 local function drawCarbonFrame()
-  local cfD = C_CF1   -- solid dark carbon fill color
+  local cfD  = C_CF1   -- solid dark carbon fill color
+  local sw   = _screenW
+  local sh   = _screenH
 
   -- ---- Flat frame panels ----
-  lcd.drawFilledRectangle(0, 0, 800, TOP_MID, cfD)
-  lcd.drawFilledRectangle(0, TOP_MID, FRM_L, 480 - TOP_MID - FRM_B, cfD)
-  lcd.drawFilledRectangle(800 - FRM_R, TOP_MID, FRM_R, 480 - TOP_MID - FRM_B, cfD)
-  lcd.drawFilledRectangle(0, 480 - FRM_B, 800, FRM_B, cfD)
+  lcd.drawFilledRectangle(0, 0, sw, TOP_MID, cfD)
+  lcd.drawFilledRectangle(0, TOP_MID, FRM_L, sh - TOP_MID - FRM_B, cfD)
+  lcd.drawFilledRectangle(sw - FRM_R, TOP_MID, FRM_R, sh - TOP_MID - FRM_B, cfD)
+  lcd.drawFilledRectangle(0, sh - FRM_B, sw, FRM_B, cfD)
 
   -- ---- Inner edge bevel (bottom edge of flat top bar) ----
-  lcd.drawFilledRectangle(0, TOP_MID,   800, 1, C_SIL_HI)
-  lcd.drawFilledRectangle(0, TOP_MID+1, 800, 1, C_SIL_MID)
+  lcd.drawFilledRectangle(0, TOP_MID,   sw, 1, C_SIL_HI)
+  lcd.drawFilledRectangle(0, TOP_MID+1, sw, 1, C_SIL_MID)
 
   -- cyan accent line across full bottom of top bar
-  lcd.drawFilledRectangle(0, TOP_MID + 2, 800, 2, C_CYAN)
+  lcd.drawFilledRectangle(0, TOP_MID + 2, sw, 2, C_CYAN)
 
   -- left/right frame inner edge bevels
-  lcd.drawFilledRectangle(FRM_L,   GY, 1, GH, C_SIL_HI)
-  lcd.drawFilledRectangle(FRM_L+1, GY, 1, GH, C_SIL_MID)
-  lcd.drawFilledRectangle(800-FRM_R-2, GY, 1, GH, C_SIL_MID)
-  lcd.drawFilledRectangle(800-FRM_R-1, GY, 1, GH, C_SIL_HI)
+  lcd.drawFilledRectangle(FRM_L,      GY, 1, GH, C_SIL_HI)
+  lcd.drawFilledRectangle(FRM_L+1,    GY, 1, GH, C_SIL_MID)
+  lcd.drawFilledRectangle(sw-FRM_R-2, GY, 1, GH, C_SIL_MID)
+  lcd.drawFilledRectangle(sw-FRM_R-1, GY, 1, GH, C_SIL_HI)
 
   -- bottom frame top edge bevel
-  lcd.drawFilledRectangle(GX, 480-FRM_B-2, GW, 1, C_SIL_MID)
-  lcd.drawFilledRectangle(GX, 480-FRM_B-1, GW, 1, C_SIL_HI)
+  lcd.drawFilledRectangle(GX, sh-FRM_B-2, GW, 1, C_SIL_MID)
+  lcd.drawFilledRectangle(GX, sh-FRM_B-1, GW, 1, C_SIL_HI)
 
   -- outer silver border
-  lcd.drawFilledRectangle(0,   0, 800,   1, C_SIL_MID)
-  lcd.drawFilledRectangle(0,   0,   1, 480, C_SIL_MID)
-  lcd.drawFilledRectangle(799, 0,   1, 480, C_SIL_MID)
-  lcd.drawFilledRectangle(0, 479, 800,   1, C_SIL_MID)
+  lcd.drawFilledRectangle(0,    0,  sw,   1, C_SIL_MID)
+  lcd.drawFilledRectangle(0,    0,   1,  sh, C_SIL_MID)
+  lcd.drawFilledRectangle(sw-1, 0,   1,  sh, C_SIL_MID)
+  lcd.drawFilledRectangle(0,  sh-1, sw,   1, C_SIL_MID)
 
   -- cyan corner L-brackets
-  lcd.drawFilledRectangle(  0,   0,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(  0,   0,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(782,   0,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(798,   0,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(  0, 462,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(  0, 462,   2,  18, C_CYAN)
-  lcd.drawFilledRectangle(782, 462,  18,   2, C_CYAN)
-  lcd.drawFilledRectangle(798, 462,   2,  18, C_CYAN)
+  lcd.drawFilledRectangle(     0,     0, 18,  2, C_CYAN)
+  lcd.drawFilledRectangle(     0,     0,  2, 18, C_CYAN)
+  lcd.drawFilledRectangle(sw-18,     0, 18,  2, C_CYAN)
+  lcd.drawFilledRectangle(sw- 2,     0,  2, 18, C_CYAN)
+  lcd.drawFilledRectangle(     0, sh-18, 18,  2, C_CYAN)
+  lcd.drawFilledRectangle(     0, sh-18,  2, 18, C_CYAN)
+  lcd.drawFilledRectangle(sw-18, sh-18, 18,  2, C_CYAN)
+  lcd.drawFilledRectangle(sw- 2, sh-18,  2, 18, C_CYAN)
 end
 
 -- =========================================================================
@@ -824,10 +954,11 @@ local function drawHeaderTextFit(x, y, txt, col, maxW)
   lcd.drawText(x, y, s, flags + (col or C_WHITE))
 end
 
-local function drawHeaderTextC(x, y, txt, col)
+local function drawHeaderTextC(x, y, txt, col, sizeFlags)
   local s = string.upper(tostring(txt or ""))
-  lcd.drawText(x + 2, y + 2, s, MIDSIZE + BOLD + CENTER + C_SIL_DK)
-  lcd.drawText(x, y, s, MIDSIZE + BOLD + CENTER + (col or C_WHITE))
+  local sf = sizeFlags or (MIDSIZE + BOLD)
+  lcd.drawText(x + 2, y + 2, s, sf + CENTER + C_SIL_DK)
+  lcd.drawText(x, y, s, sf + CENTER + (col or C_WHITE))
 end
 
 -- =========================================================================
@@ -1285,8 +1416,7 @@ end
 local function tdLQ(o)
   local v = getS(SN_LQ)
   return { val=v and string.format("%d",v) or "---", unit="%",
-           pct=v, col=cLQ(v,o.LQWrn),
-           sub=v and string.format("warn<%d%%",o.LQWrn) or nil }
+           pct=v, col=cLQ(v,o.LQWrn) }
 end
 
 local function inferCellCountFromPack(packV, fullCellV)
@@ -1319,10 +1449,9 @@ local function tdBatt(o)
   local fV=o.FullV/10.0; local eV=3.30
   local cV=volt and (volt/nc) or nil
   local pct=cV and math.max(0,math.min(100,(cV-eV)/(fV-eV)*100)) or nil
-  return { val=volt and string.format("%.1fV",volt) or "---",
-           unit=cV and string.format("%.2f/cell  %dS",cV,nc) or "",
-           pct=pct, col=cPct(pct),
-           sub=pct and string.format("%d%%",math.floor(pct)) or nil }
+  return { val=volt and string.format("%.1f",volt) or "---",
+           unit=string.format("V %dS", nc),
+           pct=pct, col=cPct(pct) }
 end
 local function tdCurrent(o)
   local v=getS(SN_CURR)
@@ -1354,7 +1483,7 @@ local function tdRSSI(o)
   local col=v1 and (v1>-65 and C_GREEN or (v1>-85 and C_YELLOW or C_RED)) or C_DIM
   return { val=v1 and tostring(v1) or "---", unit="dBm",
            pct=v1 and math.max(0,math.min(100,v1+130)) or nil,
-           col=col, sub=v2 and string.format("a2:%d",v2) or nil }
+           col=col }
 end
 local function tdCellV(o)
   local volt=getS(SN_VOLT)
@@ -1386,7 +1515,7 @@ end
 local function tdAlt(o)
   local v=getS(SN_ALT)
   local pct=v and math.max(0,math.min(100,v/5)) or nil
-  return { val=v and string.format("%.1f",v) or "---", unit="metres",
+  return { val=v and string.format("%d", math.floor(v + 0.5)) or "---", unit="metres",
            pct=pct, col=cPctInv(pct) }
 end
 local function tdDist(o)
@@ -1524,7 +1653,7 @@ end
 local function menuBounds()
   local visibleRows = math.min(#METRICS, MENU_MAX_ROWS)
   local h = MENU_TITLE_H + MENU_PAD * 2 + visibleRows * MENU_ROW_H + MENU_ROW_H
-  local y = math.floor((480 - h) / 2)
+  local y = math.floor((_screenH - h) / 2)
   return MENU_X, y, MENU_W, h
 end
 
@@ -1621,7 +1750,7 @@ local function handleScrollWheel(widget, event)
     else
       -- Menu closed: rotate through tiles
       local direction = (event == EVT_ROT_RIGHT) and 1 or -1
-      _scrollWheelUi.focusedTile = clampInt(_scrollWheelUi.focusedTile + direction, 1, #_tileSlots)
+      _scrollWheelUi.focusedTile = clampInt(_scrollWheelUi.focusedTile + direction, 1, math.min(#_tileSlots, HX_COLS * HX_ROWS))
     end
     return
   end
@@ -1768,9 +1897,10 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   local cx = tx + math.floor(tw / 2)
 
   -- Slightly denser layout so text occupies more of each tile.
+  -- On small screens push yUnit further down to avoid overlapping the big value.
   local yLbl  = ty + math.floor(th * 0.22)
   local yVal  = ty + math.floor(th * 0.36)
-  local yUnit = ty + math.floor(th * 0.62)
+  local yUnit = ty + math.floor(th * (_is480x272 and 0.70 or 0.62)) + 4
   local ySub  = ty + math.floor(th * 0.77)
 
   local shortLbl = lbl_str
@@ -1788,7 +1918,7 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
     local mCol = d.col or ((d.pct ~= nil) and cPct(d.pct) or C_WHITE)
     local pad = math.max(8, math.floor(tw * 0.14))
     local valY = yLbl + 14
-    local unitY = ty + math.floor(th * 0.72)
+    local unitY = ty + math.floor(th * 0.72) + 4
     local barH = math.max(8, math.min(12, math.floor(th * 0.09)))
     local barTop = ty + math.floor(th * 0.50) + 6
     local maxBarTop = unitY - 8 - barH
@@ -1807,7 +1937,11 @@ local function renderTile(tx, ty, tw, th, lbl_str, d, mode)
   else
     -- label: small, cyan, centered
     lcd.drawText(cx, yLbl, shortLbl, SMLSIZE + CENTER + C_CYAN)
-    lcd.drawText(cx, yVal, d.val, MIDSIZE + BOLD + CENTER + (d.col or C_WHITE))
+    -- RF MODE strings can be wide (e.g. "333Hz/8ch"); use SMLSIZE to stay inside the tile.
+    local valFlags = (lbl_str == "RF MODE") and (SMLSIZE + BOLD + CENTER + (d.col or C_WHITE))
+                                              or  (MIDSIZE + BOLD + CENTER + (d.col or C_WHITE))
+    local yValAdj  = (lbl_str == "RF MODE") and (ty + math.floor(th * 0.42)) or yVal
+    lcd.drawText(cx, yValAdj, d.val, valFlags)
     if d.unit and d.unit ~= "" then
       lcd.drawText(cx, yUnit, d.unit, SMLSIZE + CENTER + C_DIM)
     end
@@ -1827,10 +1961,20 @@ local function drawHeader(o)
     local info = model.getInfo()
     if info and info.name and info.name ~= "" then mname = info.name end
   end
+  -- Layout helpers: proportional positions relative to screen width.
+  local sep1X  = math.floor(_screenW * 0.350)   -- left separator (wider MODE bin)
+  local cx     = math.floor(_screenW / 2)        -- screen center (~400 on 800, ~240 on 480)
+  local sep2X  = math.floor(_screenW * 0.650)    -- right separator (wider MODE bin)
+  local armedX = sep2X + 14                      -- armed/disarmed text start
+  local rightX = _screenW - 15                   -- right-aligned text anchor
+  local sepH   = TOP_MID - 16                    -- separator bar height (fits within header)
+  local yTop   = 10                              -- top text row Y
+  local yBot   = math.max(yTop + 14, TOP_MID - 22)  -- bottom text row Y
+
   -- Model name in compact font with width clamp so it never overlaps FM area.
-  drawHeaderTextFit(80, 12, mname, C_SIL_HI, 210)
-  -- vertical separators (symmetric around x=400)
-  lcd.drawFilledRectangle(300, 8, 2, 58, C_SIL_LO)
+  drawHeaderTextFit(FRM_L - 10, yTop, mname, C_SIL_HI, sep1X - 65)
+  -- vertical separators (symmetric around screen center)
+  lcd.drawFilledRectangle(sep1X, 8, 2, sepH, C_SIL_LO)
   -- flight mode
   local fmDisp = "MODE"
   if hasActiveTelemetry() then
@@ -1840,30 +1984,42 @@ local function drawHeader(o)
   if hasActiveTelemetry() then
     fmCol = _lastArmed and C_ORANGE or C_SIL_HI
   end
-  drawHeaderTextC(400, 10, fmDisp, fmCol)
+  drawHeaderTextC(cx, yTop, fmDisp, fmCol, SMLSIZE + BOLD)
   -- armed/disarmed indicator (replaces timer - timer is in FLIGHT TIMER tile)
-  lcd.drawFilledRectangle(500, 8, 2, 58, C_SIL_LO)
+  lcd.drawFilledRectangle(sep2X, 8, 2, sepH, C_SIL_LO)
   if _nogpsOverlayUntil and (getTime() or 0) < _nogpsOverlayUntil then
     local s = "NO GPS"
-    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
-    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_RED)
+    lcd.drawText(armedX + 2, yTop + 2, s, SMLSIZE + BOLD + C_SIL_DK)
+    lcd.drawText(armedX,     yTop,     s, SMLSIZE + BOLD + C_RED)
   elseif _lastArmed then
-    drawHeaderText(530, 10, "ARMED", C_RED)
+    local s = "ARMED"
+    if _is480x272 then
+      lcd.drawText(armedX + 1, yTop + 1, s, TINSIZE + BOLD + C_SIL_DK)
+      lcd.drawText(armedX,     yTop,     s, TINSIZE + BOLD + C_RED)
+    else
+      lcd.drawText(armedX + 2, yTop + 2, s, SMLSIZE + BOLD + C_SIL_DK)
+      lcd.drawText(armedX,     yTop,     s, SMLSIZE + BOLD + C_RED)
+    end
   else
     local s = "DISARMED"
-    lcd.drawText(532, 12, s, SMLSIZE + BOLD + C_SIL_DK)
-    lcd.drawText(530, 10, s, SMLSIZE + BOLD + C_GREEN)
+    if _is480x272 then
+      lcd.drawText(armedX + 1, yTop + 1, s, TINSIZE + BOLD + C_SIL_DK)
+      lcd.drawText(armedX,     yTop,     s, TINSIZE + BOLD + C_GREEN)
+    else
+      lcd.drawText(armedX + 2, yTop + 2, s, SMLSIZE + BOLD + C_SIL_DK)
+      lcd.drawText(armedX,     yTop,     s, SMLSIZE + BOLD + C_GREEN)
+    end
   end
   -- TX voltage top-right
   local txv = getValue("tx-voltage")
   if type(txv) == "number" and txv > 0 then
-    lcd.drawText(785, 8, string.format("TX %.1fV", txv),
+    lcd.drawText(rightX, yTop - 2, string.format("TX %.1fV", txv),
       SMLSIZE+RIGHT+(txv > 7.0 and C_GREEN or C_RED))
   end
   -- screen type label bottom-right
   local st = getScreenType(o)
   local mLbl = (st==1) and "SCR: BAR" or (st==2) and "SCR: GAUGE" or "SCR: NUM"
-  lcd.drawText(785, 56, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
+  lcd.drawText(rightX, yBot, mLbl, SMLSIZE+RIGHT+C_SIL_MID)
 
   -- Clock in the top-right pit gap (outside the top-right hex tile).
   if getDateTime then
@@ -1875,8 +2031,14 @@ local function drawHeader(o)
         local t = string.format("%02d:%02d", hh, mm)
         local cx = GX + GW - 10
         local cy = GY + 10
-        lcd.drawText(cx, cy, "TIME", SMLSIZE + RIGHT + C_SIL_MID)
-        lcd.drawText(cx, cy + 12, t, MIDSIZE + BOLD + RIGHT + C_SIL_HI)
+        if _is480x272 then
+          -- Small screen: "TIME" micro-label + SMLSIZE time below it
+          lcd.drawText(cx, cy,      "TIME", SMLSIZE + RIGHT + C_SIL_MID)
+          lcd.drawText(cx, cy + 12, t,      TINSIZE + BOLD + RIGHT + C_SIL_HI)
+        else
+          lcd.drawText(cx, cy, "TIME", SMLSIZE + RIGHT + C_SIL_MID)
+          lcd.drawText(cx, cy + 12, t, MIDSIZE + BOLD + RIGHT + C_SIL_HI)
+        end
       end
     end
   end
@@ -1951,7 +2113,7 @@ local function drawSideBatteryBars(o)
   if railW < 12 then return end
 
   local y = TOP_MID + 16
-  local h = 480 - TOP_MID - FRM_B - 34
+  local h = _screenH - TOP_MID - FRM_B - 34
   if h < 80 then return end
 
   local txv = getValue("tx-voltage")
@@ -1961,7 +2123,7 @@ local function drawSideBatteryBars(o)
   local rxPct = pctFromRxCellVoltage(rxv, o)
 
   drawSideBar(railPadX, y, railW, h, rxPct, "RX batt")
-  drawSideBar(800 - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
+  drawSideBar(_screenW - FRM_R + railPadX, y, railW, h, txPct, "TX batt")
 end
 
 -- =========================================================================
@@ -1969,7 +2131,8 @@ end
 -- =========================================================================
 local function drawGrid(opts)
   local mode = getScreenType(opts)
-  for i = 1, #_tileSlots do
+  local maxTiles = HX_COLS * HX_ROWS
+  for i = 1, math.min(#_tileSlots, maxTiles) do
     local metricIdx = _tileSlots[i] or i
     local metric = METRICS[metricIdx] or METRICS[i]
     local tx, ty, tw, th = tileRect(i)
@@ -2035,7 +2198,8 @@ local function create(zone, options)
   _touchUi.menuScroll = 0
   _scrollWheelUi.focusedTile = 1
   _scrollWheelUi.lastRotaryEvent = 0
-  _deviceType = detectDeviceType(options)
+  _deviceType = detectDeviceType(options, zone)
+  initLayoutConstants(zone)
   return { zone = zone, options = options }
 end
 local function update(widget, options)
@@ -2052,12 +2216,12 @@ local function update(widget, options)
   initColors(options and options.Theme)
   syncTileSlotsFromOptions(options)
   saveTileSlotsToStorage(options)
-  _deviceType = detectDeviceType(options)
+  _deviceType = detectDeviceType(options, widget.zone)
 end
 
 local function refresh(widget, event, touchState)
   _gaugeBgBuildBudget = 2
-  initLayoutConstants()
+  initLayoutConstants(widget.zone)
   initColors(widget.options and widget.options.Theme)
   if #_tileSlots ~= #METRICS then
     syncTileSlotsFromOptions(widget.options)
@@ -2121,9 +2285,10 @@ end
 local function drawGpsStatus()
   local sats = getS(SN_SATS)
   local hasFix = (type(sats) == "number") and (sats >= 6)
-  -- Move higher: 48px above bottom of pit area
+  -- Offset the GPS status lower on small screens so it doesn't crowd the tiles
+  local yOffset = _is480x272 and 22 or 0
   local x = GX + 10
-  local y = GY + GH - 60
+  local y = GY + GH - 60 + yOffset
   if hasFix then
     -- Top line: "GPS Locked" (green, smlsize, not bold, same as NO GPS LOCK)
     lcd.drawText(x + 1, y - 2, "GPS Locked", SMLSIZE + C_SIL_DK)
