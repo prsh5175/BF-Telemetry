@@ -1,6 +1,12 @@
 # BF Telemetry Widget
 
-An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, designed specifically for its 800×480 color LCD touchscreen. It displays 12 live Betaflight/ELRS telemetry tiles in a hex honeycomb layout, with TX and RX battery level bars on the side rails and a time-of-day clock in the top-right pit area.
+An EdgeTX full-screen telemetry widget for Betaflight/ELRS aircraft. Supports multiple radio screens with responsive layout:
+
+- **Radiomaster TX16S MK III** (800×480 touchscreen) — 12 hex tiles, touchscreen navigation
+- **Radiomaster TX16S MK II** (480×272 touchscreen) — 8 hex tiles, touch + scroll wheel navigation  
+- **Jumper T16** (480×272 scroll wheel only) — 8 hex tiles, scroll wheel + button navigation
+
+Displays live telemetry in a hex honeycomb layout with TX/RX battery bars, time-of-day clock, and persistent GPS status.
 
 > **Supported radio:** Radiomaster TX16S MK III. Support for the **Radiomaster T15 Max**, **TX16S MK II**, and **Jumper T16** is currently in development.
 
@@ -12,8 +18,10 @@ An EdgeTX full-screen telemetry widget for the **Radiomaster TX16S MK III**, des
 |---|---|
 | EdgeTX | 2.12+ |
 | Lua | 5.3 |
-| Radio | Radiomaster TX16S MK III (800×480 screen) |
-| Telemetry | Betaflight + ExpressLRS (ELRS) |
+| Radio | **Any of:**<br>• Radiomaster TX16S MK III (800×480, touchscreen)<br>• Radiomaster TX16S MK II (480×272, touchscreen + scroll wheel)<br>• Jumper T16 (480×272, scroll wheel only) |
+| Telemetry | Betaflight + ExpressLRS (ELRS) or compatible FC |
+
+**Auto-Detection:** The widget automatically detects your radio's screen size and input type. No configuration needed beyond standard installation.
 
 ---
 
@@ -98,6 +106,10 @@ This is the same low-risk pattern used by most telemetry widgets (copy one scrip
 
 `SOUNDS/` is optional and only needed if you want custom voice overrides.
 
+> **Note for Jumper T16 users:** This widget is fully compatible with Jumper T16's 480×272 screen and scroll wheel input. No additional steps needed beyond standard installation — the widget auto-detects your radio and adjusts layout and input handling accordingly.
+
+> **Note for Jumper T16 users:** This widget is fully compatible with Jumper T16's 480×272 screen and scroll wheel input. No additional steps needed beyond standard installation — the widget auto-detects your radio and adjusts layout and input handling accordingly.
+
 ### Alternate (Drag-and-Drop Repo Top-Level Folders)
 
 **⚠️ macOS/Windows Users: See the Safe Installation sections above first.**
@@ -136,6 +148,25 @@ If you want the square theme, replace `main.lua` with `main.square.lua`.
 2. On the radio, navigate to **Screen Setup → Add Widget** and select **BF Telemetry**.
 
 Only `main.lua` is needed on the radio for the default theme. The emulator files, screenshots, and launcher are development-only and do not need to be copied to the SD card.
+
+---
+
+## Supported Radios
+
+### Radiomaster TX16S MK III (800×480, touchscreen)
+- **Tiles:** 12 hex tiles in 6×2 honeycomb grid
+- **Input:** Touchscreen (primary), Scroll wheel + buttons (alternative)
+- **Navigation:** Touch any tile to open metric picker menu
+
+### Radiomaster TX16S MK II (480×272, touchscreen + scroll wheel)
+- **Tiles:** 8 hex tiles in 4×2 honeycomb grid (responsive layout)
+- **Input:** Touchscreen (primary), Scroll wheel + buttons (alternative)
+- **Navigation:** Touch tiles OR use scroll wheel + Enter button
+
+### Jumper T16 (480×272, scroll wheel only)
+- **Tiles:** 8 hex tiles in 4×2 honeycomb grid (responsive layout)
+- **Input:** Scroll wheel + buttons only (no touchscreen)
+- **Navigation:** Scroll wheel to focus tile, Enter button to open metric picker
 
 ---
 
@@ -245,23 +276,32 @@ The widget will use custom files in preference to EdgeTX system voices.
 
 ### Switching Display Modes
 
-The widget has three display modes, each showing the same 12 metrics in a different visual style:
+The widget has three display modes, each showing the same 12 metrics (or 8 on smaller screens) in a different visual style:
 
 - **`[ NUM ]`** — Numeric: large value text with label and unit.
 - **`[ BAR ]`** — Bar graph: horizontal progress bar with compact value/unit text.
 - **`[GAUGE]`** — Arc gauge: semicircular arc that grows with the value.
 
-**On the radio (TX16S MK III):**
+**On TX16S MK III (touchscreen):**
 - Turn the scroll wheel to cycle through modes, **or**
-- Long-press the scroll wheel (hold ~1 second) to open the tile assignment menu for the tile under the cursor.
+- Long-press the scroll wheel (hold ~1 second) to open the tile assignment menu.
+
+**On TX16S MK II (touchscreen + scroll wheel):**
+- Touch and hold a tile for metric assignment (same as MK III), **or**
+- Use scroll wheel + Enter for scroll wheel-only navigation
+
+**On Jumper T16 (scroll wheel only):**
+- Use scroll wheel to focus a tile (bright cyan ring shows focus)
+- Press Enter/OK to open metric picker
+- Scroll wheel in menu to select metric, Enter to apply
 
 **In the emulator:** Press `N`, `B`, or `G` on your keyboard.
 
 ---
 
-### Reassigning Tiles (Touchscreen)
+### Reassigning Tiles — Touchscreen (TX16S MK III / TX16S MK II)
 
-Each of the 12 hex tiles can be set to display any metric you want.
+Each hex tile can be set to display any metric you want.
 
 **On the radio:**
 1. Touch and hold a hex tile on the touchscreen.
@@ -274,6 +314,21 @@ Each of the 12 hex tiles can be set to display any metric you want.
 > The menu opens with the currently-assigned metric already highlighted so you can confirm what is assigned before changing it.
 
 **In the emulator (legacy mode):** Click a tile to open the metric menu. Click a metric name to assign it, or click outside the menu to dismiss.
+
+---
+
+### Reassigning Tiles — Scroll Wheel (TX16S MK II / Jumper T16)
+
+Use scroll wheel + buttons for metric assignment on radios without convenient touchscreen access:
+
+**On the radio:**
+1. **Scroll wheel** rotates through tiles — a bright cyan focus ring shows the currently-focused tile
+2. **Press Enter/OK button** on the focused tile — metric picker menu opens
+3. **Scroll wheel** in the menu rotates through available metrics (first visible metric is highlighted)
+4. **Press Enter/OK** to assign the highlighted metric and close the menu
+5. **Press Return/Exit** to dismiss the menu without changing anything
+
+This same scroll wheel navigation is also available as an alternative on **TX16S MK III** if you prefer not to use the touchscreen.
 
 ---
 
@@ -378,17 +433,33 @@ python dist/launcher.py
 - **Lua-driven** (requires `lupa`): runs `main.lua` directly; hot-reloads on every file save — edit and see changes immediately.
 - **Legacy Python** (no `lupa` needed): Python-native renderer that mirrors the Lua layout and behavior.
 
+### Multi-Screen Testing
+
+In **Lua-driven mode**, press these keys to switch between screen sizes and device types:
+
+| Key | Screen | Device | Notes |
+|---|---|---|---|
+| `1` | 800×480 | TX16S MK III | Default; 12-tile layout, touchscreen |
+| `2` | 480×272 | TX16S MK II | 8-tile layout, touchscreen + scroll wheel |
+| `3` | 480×272 | Jumper T16 | 8-tile layout, scroll wheel only |
+
+The screen configuration is remembered for the next launch, so you can switch between devices and test the responsive layout without restarting.
+
 ### Generating Screenshots
 
-To regenerate all three mode screenshots automatically (no window needed):
+To regenerate all display mode screenshots for all supported screen sizes automatically (no window needed):
 
 ```bash
 python dist/take_screenshots.py
 ```
 
+This generates screenshots for:
+- **800×480 (TX16S MK III):** `BF Telem lua screenshot_{num|bar|gauge}.png`
+- **480×272 (TX16S MK II / Jumper T16):** `BF Telem lua screenshot_{num|bar|gauge}_480x272.png`
+
 Output is saved to `assets/screenshots/`.
 
-Screenshot font mapping follows the Lua widget flags used in `main.lua` (`SMLSIZE`, `MIDSIZE`, `DBLSIZE`, and `BOLD`) so text weight/scale in emulator captures is aligned with the radio UI.
+Screenshot font mapping follows the Lua widget flags used in `main.lua` (`SMLSIZE`, `MIDSIZE`, `DBLSIZE`, and `BOLD`) and scales responsively for each screen size.
 
 ---
 
@@ -412,6 +483,26 @@ Semicircular arc gauges that grow as the value increases. Arc color follows the 
 ![Gauge Mode (latest)](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge.png)
 
 > The **RX batt** (left) and **TX batt** (right) vertical bars are always visible on the side rails in all three modes. The persistent GPS status display is also always visible in the bottom left.
+
+---
+
+## 480×272 Responsive Layout (TX16S MK II / Jumper T16)
+
+The widget automatically scales to smaller screens, maintaining the same three display modes with a 4-column honeycomb grid (8 tiles instead of 12):
+
+### Numeric Mode (480×272)
+![Numeric Mode 480x272](assets/screenshots/BF%20Telem%20lua%20screenshot_num_480x272.png)
+
+### Bar Mode (480×272)
+![Bar Mode 480x272](assets/screenshots/BF%20Telem%20lua%20screenshot_bar_480x272.png)
+
+### Gauge Mode (480×272)
+![Gauge Mode 480x272](assets/screenshots/BF%20Telem%20lua%20screenshot_gauge_480x272.png)
+
+The layout automatically detects your radio's screen size and adjusts:
+- **Hex grid:** 6 columns (12 tiles) on 800×480, 4 columns (8 tiles) on 480×272
+- **Font sizes:** Proportionally scaled (~60% on smaller screens)
+- **UI elements:** Responsive positioning and sizing for all screen sizes
 
 ---
 

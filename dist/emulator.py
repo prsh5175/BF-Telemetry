@@ -19,7 +19,9 @@ except Exception:
     lua_type = None
     HAS_LUPA = False
 
-W, H = 800, 480
+# Global screen size and device type (can be changed at runtime)
+W, H = 800, 480  # Default to 800x480 (TX16S MK III)
+DEVICE_TYPE = "TX16S_MK3"  # Can be: TX16S_MK3, TX16S_MK2, JumperT16
 FPS  = 15
 MENU_W = 380
 MENU_ROW_H = 38
@@ -27,6 +29,33 @@ MENU_TITLE_H = 28
 MENU_PAD = 8
 MENU_MAX_ROWS = 8
 CLICK_DEBOUNCE_MS = 140
+
+def set_screen_size(width, height, device_type="TX16S_MK3"):
+    """Change the emulator screen size and device type."""
+    global W, H, DEVICE_TYPE, L
+    W, H = width, height
+    DEVICE_TYPE = device_type
+    if LUA_PATH:
+        L = make_layout(parse_lua(LUA_PATH))
+
+def load_screen_config():
+    """Load remembered screen size and device type from config."""
+    try:
+        cfg = os.path.join(get_base_dir(), 'bftelem_screen.json')
+        data = json.load(open(cfg))
+        if 'width' in data and 'height' in data:
+            set_screen_size(data['width'], data['height'], data.get('device', 'TX16S_MK3'))
+    except Exception:
+        pass
+
+def save_screen_config():
+    """Save current screen size and device type to config."""
+    try:
+        cfg = os.path.join(get_base_dir(), 'bftelem_screen.json')
+        with open(cfg, 'w') as f:
+            json.dump({'width': W, 'height': H, 'device': DEVICE_TYPE}, f)
+    except Exception:
+        pass
 
 # ── Lua file discovery ────────────────────────────────────────────────────────
 def get_base_dir():
@@ -196,33 +225,50 @@ def make_layout(c):
         v = c.get(k)
         return v if isinstance(v, tuple) else d
 
+    # Responsive layout for 800x480 or 480x272
+    is_480x272 = (W == 480 and H == 272)
+
+    if is_480x272:
+        # 480x272 layout (TX16S MK II / Jumper T16)
+        FRM_L    = 16
+        FRM_R    = 16
+        FRM_B    = 8
+        TOP_EDGE = 12
+        TOP_MID  = 38
+        RAMP_W   = 36
+        PEAK_X1  = 120
+        PEAK_X2  = 360
+        HX_COLS  = 4
+        HX_ROWS  = 2
+    else:
+        # 800x480 layout (TX16S MK III default)
+        FRM_L    = n('FRM_L',    30)
+        FRM_R    = n('FRM_R',    30)
+        FRM_B    = n('FRM_B',    14)
+        TOP_EDGE = n('TOP_EDGE', 22)
+        TOP_MID  = n('TOP_MID',  82)
+        RAMP_W   = n('RAMP_W',   80)
+        PEAK_X1  = n('PEAK_X1', 200)
+        PEAK_X2  = n('PEAK_X2', 600)
+        HX_COLS  = n('HX_COLS', 6)
+        HX_ROWS  = n('HX_ROWS', 2)
+
     # -- frame geometry --
-    FRM_L    = n('FRM_L',    30)
-    FRM_R    = n('FRM_R',    30)
-    FRM_B    = n('FRM_B',    14)
-    TOP_EDGE = n('TOP_EDGE', 22)
-    TOP_MID  = n('TOP_MID',  82)
-    RAMP_W   = n('RAMP_W',   80)
-    PEAK_X1  = n('PEAK_X1', 200)
-    PEAK_X2  = n('PEAK_X2', 600)
-    # -- rectangular grid (legacy) --
-    COLS = n('_COLS', 4)
-    ROWS = n('_ROWS', 3)
-    GAP  = n('_GAP',  4)
-    # -- derived (mirrors main.lua computed locals) --
     RAMP_X1 = PEAK_X1 - RAMP_W
     RAMP_X2 = PEAK_X2 + RAMP_W
     GX = FRM_L
     GY = TOP_MID + 2
-    GW = 800 - FRM_L - FRM_R
-    GH = 480 - TOP_MID - FRM_B
+    GW = W - FRM_L - FRM_R
+    GH = H - TOP_MID - FRM_B
+    # -- rectangular grid (legacy) --
+    COLS = n('_COLS', 4)
+    ROWS = n('_ROWS', 3)
+    GAP  = n('_GAP',  4)
     TW = (GW - GAP * (COLS + 1)) // COLS
     TH = (GH - GAP * (ROWS + 1)) // ROWS
 
-    # -- honeycomb grid (new) --
-    USE_HEX = ('HX_COLS' in c and 'HX_ROWS' in c)
-    HX_COLS = n('HX_COLS', 6)
-    HX_ROWS = n('HX_ROWS', 2)
+    # -- honeycomb grid --
+    USE_HEX = True
     HX_GAP  = n('HX_GAP',  2)
     HEX_W = int((GW - HX_GAP * 2) / (0.25 + 0.75 * HX_COLS))
     HEX_H = int(HEX_W * 1.00)
@@ -286,6 +332,7 @@ def reload_lua():
     global L
     if LUA_PATH:
         L = make_layout(parse_lua(LUA_PATH))
+    load_screen_config()
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 F_LBL = F_SML = F_SML_B = F_BAR_VAL = F_NUM_VAL = F_GAUGE_VAL = F_MID = F_MID_B = F_DBL = F_DBL_B = F_HDR = None
@@ -303,22 +350,24 @@ def init_fonts():
                 try:    return pygame.font.Font(path, size)
                 except: pass
         return pygame.font.SysFont("arial", size, bold=bold)
+    # Responsive font scaling for 480x272 vs 800x480
+    scale = 0.6 if (W == 480 and H == 272) else 1.0
     # Tuned to better match on-radio visual scale.
     # Slightly larger for improved screenshot readability.
-    F_LBL = _font(13)
-    F_SML = _font(13)
-    F_SML_B = _font(13, bold=True)
+    F_LBL = _font(int(13 * scale))
+    F_SML = _font(int(13 * scale))
+    F_SML_B = _font(int(13 * scale), bold=True)
     # BAR mode value text: 2x current size for stronger visibility in screenshots.
-    F_BAR_VAL = _font(28, bold=True)
+    F_BAR_VAL = _font(int(28 * scale), bold=True)
     # NUM and GAUGE value text: 1.5x current midsize values.
-    F_NUM_VAL = _font(30, bold=True)
-    F_GAUGE_VAL = _font(30, bold=True)
-    F_MID = _font(20)
-    F_MID_B = _font(20, bold=True)
-    F_DBL = _font(26)
-    F_DBL_B = _font(26, bold=True)
+    F_NUM_VAL = _font(int(30 * scale), bold=True)
+    F_GAUGE_VAL = _font(int(30 * scale), bold=True)
+    F_MID = _font(int(20 * scale))
+    F_MID_B = _font(int(20 * scale), bold=True)
+    F_DBL = _font(int(26 * scale))
+    F_DBL_B = _font(int(26 * scale), bold=True)
     # Header labels (AIR65 / ANGLE / ARMED): bold and 2x previous header size.
-    F_HDR = _font(40, bold=True)
+    F_HDR = _font(int(40 * scale), bold=True)
 
 # ── Draw primitives ───────────────────────────────────────────────────────────
 def fr(surf, x, y, w, h, c):
@@ -1196,10 +1245,12 @@ class LuaWidgetBridge:
 
 
 def run_lua_driven_emulator(lua_path):
+    # Load remembered screen config
+    load_screen_config()
     surf = pygame.display.set_mode((W, H))
     pygame.display.set_caption(
-        f"BF Telemetry Emulator (Lua-Driven)  [{os.path.basename(lua_path)}]"
-        "   N=num  B=bar  G=gauge  A=arm  R=reload  Q=quit")
+        f"BF Telemetry Emulator (Lua-Driven)  [{os.path.basename(lua_path)}]  Screen: {W}x{H} ({DEVICE_TYPE})\n"
+        "Keys: N=num B=bar G=gauge A=arm R=reload S=screenshot Q=quit | 1=800x480(TX3) 2=480x272(MK2) 3=480x272(T16)")
     clock = pygame.time.Clock()
 
     bridge = LuaWidgetBridge(lua_path)
@@ -1234,6 +1285,27 @@ def run_lua_driven_emulator(lua_path):
                     fname = os.path.join(os.path.dirname(lua_path), "assets", "screenshots", f"BF Telem lua screenshot_{mode_name}.png")
                     os.makedirs(os.path.dirname(fname), exist_ok=True)
                     pygame.image.save(surf, fname)
+                    reloaded_msg = pygame.time.get_ticks()
+                elif ev.key == pygame.K_1:
+                    # 800x480 TX16S MK III
+                    set_screen_size(800, 480, "TX16S_MK3")
+                    save_screen_config()
+                    surf = pygame.display.set_mode((W, H))
+                    bridge.reload_script()
+                    reloaded_msg = pygame.time.get_ticks()
+                elif ev.key == pygame.K_2:
+                    # 480x272 TX16S MK II (touchscreen)
+                    set_screen_size(480, 272, "TX16S_MK2")
+                    save_screen_config()
+                    surf = pygame.display.set_mode((W, H))
+                    bridge.reload_script()
+                    reloaded_msg = pygame.time.get_ticks()
+                elif ev.key == pygame.K_3:
+                    # 480x272 Jumper T16 (scroll wheel)
+                    set_screen_size(480, 272, "JumperT16")
+                    save_screen_config()
+                    surf = pygame.display.set_mode((W, H))
+                    bridge.reload_script()
                     reloaded_msg = pygame.time.get_ticks()
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 mouse_down = True
